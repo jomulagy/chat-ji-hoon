@@ -1,15 +1,52 @@
-# CHAT 지훈띠 (iPhone)
+# CHAT 지훈띠
 
-React + TypeScript 화면을 Capacitor로 패키징하고, 대화 처리와 SQLite 파일 저장을 Swift 네이티브 플러그인에서 수행합니다. iOS 26 이상에서 Apple Foundation Models로 한국어 입력을 분류해 지정된 답변 중 하나를 선택합니다. 앱 시작 시 실제 모델 응답을 확인하고, 모델을 사용할 수 없으면 대화를 시작하지 않습니다.
+React + TypeScript 채팅 화면을 Capacitor로 패키징합니다. iPhone 네이티브 앱은 Swift 플러그인과 Apple Foundation Models를 사용하고, GitHub Pages 브라우저 빌드는 Cloudflare Worker를 거쳐 Gemini API로 메시지 의도를 분류합니다. 두 경로 모두 미리 정한 12개 답변 중 하나만 표시합니다.
 
-## 개발 환경
+## 웹 앱 AI 연결
 
-- Node.js 20 이상, pnpm
-- macOS와 Xcode (iOS 프로젝트 생성·빌드·기기 설치에 필요)
-- Xcode 26 SDK (Foundation Models API 사용)
-- Apple Developer Program 가입 및 Xcode 서명 팀 설정 (TestFlight 배포용)
+GitHub Pages는 정적 파일을 제공하므로 Gemini API 키를 프론트엔드에 넣으면 공개됩니다. 브라우저는 Cloudflare Worker에 요청하고, Worker가 Gemini API 키를 비밀값으로 보관해 모델을 호출합니다. Worker는 모델이 정해진 의도 코드만 반환하도록 제한하고, 실제 채팅 문구는 Worker에서 허용된 목록과 매핑합니다.
 
-## 시작
+### Worker 배포
+
+1. Google AI Studio에서 Gemini API 키를 발급합니다. 키를 Git 저장소나 웹 앱 설정에 넣지 마세요.
+2. 이 저장소 루트에서 Wrangler로 로그인합니다.
+
+   ```sh
+   pnpm dlx wrangler login
+   ```
+
+3. Gemini API 키를 Worker 비밀값으로 저장합니다.
+
+   ```sh
+   pnpm dlx wrangler secret put GEMINI_API_KEY
+   ```
+
+4. 앱 설정에서 사용할 별도 접속 코드를 만들어 비밀값으로 저장합니다. 예를 들어 Node.js가 설치된 환경에서 아래 명령은 무작위 64자리 16진수 코드를 출력합니다. 이 코드를 안전하게 보관해 두세요.
+
+   ```sh
+   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+   pnpm dlx wrangler secret put APP_ACCESS_TOKEN
+   ```
+
+5. Worker를 배포합니다.
+
+   ```sh
+   pnpm dlx wrangler deploy
+   ```
+
+6. 배포가 끝나면 나온 `https://...workers.dev` 주소와 `APP_ACCESS_TOKEN`을 웹 앱의 **AI 설정**에 입력하고 연결을 확인합니다. 접속 코드는 브라우저의 해당 기기에 저장되며 Gemini API 키는 저장되지 않습니다.
+
+`wrangler.toml`에서 모델과 허용 웹 주소를 설정할 수 있습니다. `ALLOWED_ORIGINS`에는 배포된 Pages 주소를 포함해야 합니다. 현재 기본 주소는 `https://jomulagy.github.io`입니다. 프로젝트가 `/chat-ji-hoon/` 하위 경로에 배포되어도 Origin은 도메인까지만 지정합니다. 별도 도메인을 쓰면 해당 Origin을 추가하고 다시 배포하세요.
+
+### 무료 사용 및 개인정보
+
+Gemini API 무료 사용량과 제한은 모델 및 Google 정책에 따라 바뀔 수 있습니다. 무료 등급 요청은 Google 서비스 개선에 사용될 수 있으므로 민감한 개인정보나 비밀 대화는 입력하지 마세요. API 이용 조건과 최신 한도는 [Gemini API 가격 및 요금](https://ai.google.dev/gemini-api/docs/pricing), [API 키 보안 안내](https://ai.google.dev/gemini-api/docs/api-key), [Gemini API 추가 서비스 약관](https://ai.google.dev/gemini-api/terms?hl=ko)에서 확인하세요.
+
+Cloudflare Worker는 외부 인터넷에서 호출되므로 무료 사용량만으로 무제한 또는 비공개 서비스가 보장되지는 않습니다. 접속 코드를 공유하지 말고 Google AI Studio와 Cloudflare 대시보드에서 사용량을 확인하세요.
+
+## 개발 및 iPhone 앱
+
+개발 도구는 Node.js 20 이상, pnpm, 그리고 iOS 빌드용 macOS/Xcode가 필요합니다.
 
 ```sh
 pnpm install
@@ -18,46 +55,28 @@ cd ios/App && pod install && cd ../..
 pnpm run ios:open
 ```
 
-iOS Xcode 프로젝트는 저장소의 `ios/App` 아래에 포함되어 있습니다. Swift 플러그인은 Xcode 프로젝트에 등록되어 있고 앱 시작 시 bridge에 연결됩니다. 온디바이스 모델 지침 Markdown 파일도 Xcode의 Copy Bundle Resources에 포함됩니다. Xcode에서 Apple Developer Team을 선택하고 bundle identifier `com.jihun.chatjihun`을 해당 계정에서 사용할 수 있는지 확인한 뒤 실제 iPhone 대상으로 Archive를 만듭니다.
+iOS 프로젝트는 `ios/App`에 있습니다. Xcode에서 Apple Developer Team을 설정하고 실제 iPhone 대상으로 서명 및 빌드합니다. iOS 26 이상, Apple Intelligence 지원 기기 및 모델 사용 가능 상태가 필요합니다. GitHub Actions의 서명 없는 빌드 산출물은 iPhone에 직접 설치할 수 없으며, TestFlight 배포에는 Apple 개발자 계정과 서명 설정이 필요합니다.
 
-프로젝트를 GitHub 저장소에 올리면 `.github/workflows/ios-build.yml`이 GitHub Actions macOS 러너에서 서명 없는 iOS 빌드를 수행합니다. 빌드 산출물은 Actions 실행 결과에서 다운로드할 수 있지만, unsigned `.app`은 iPhone에 직접 설치하거나 TestFlight에 올릴 수 없습니다. TestFlight 배포에는 Apple 개발자 계정, 서명 인증서 및 프로비저닝 설정이 추가로 필요합니다.
+브라우저 빌드는 로컬에 대형 모델을 다운로드하지 않습니다. 네트워크 연결과 Worker 설정이 있어야 AI 분류를 사용할 수 있습니다. iPhone 네이티브 앱은 기존 온디바이스 Foundation Models 경로를 계속 사용하며 Worker 주소를 요구하지 않습니다.
 
-## 카카오톡으로 설치 안내를 보내기
+## 기능
 
-권장 경로는 TestFlight입니다. Xcode Organizer에서 Archive를 App Store Connect에 업로드한 다음 TestFlight 테스터 초대 링크를 만들어 카카오톡으로 공유합니다. 사용자는 링크에서 TestFlight로 앱을 설치합니다. 앱을 수정하면 새 빌드를 올려야 합니다.
+- 여러 번 나눠 보낸 메시지를 마지막 입력 5초 뒤 합쳐 한 번 분류
+- 브라우저 빌드는 Gemini API로 의도 분류, iPhone 앱은 Apple Foundation Models로 온디바이스 분류
+- 브라우저 AI Worker 연결 상태를 시작 화면과 설정에서 확인
+- 채팅 기록 저장, 조회, 초기화
+- 앱 전용 `Application Support/local-chat.sqlite` SQLite 저장소 (iOS 네이티브)
+- 온디바이스 모델 지침: `native/ios/on-device-model-guidance.md`
 
-`.ipa` 파일을 카카오톡 첨부로 보내는 것만으로는 iPhone에서 탭해 바로 설치할 수 없습니다. Ad Hoc 배포는 설치할 모든 iPhone의 UDID를 Apple 개발자 계정에 등록하고 해당 기기용 프로비저닝으로 서명해야 하며, Apple 안내에 따라 Xcode 또는 Apple Configurator로 설치합니다. 다운로드 후 간단히 설치하는 목적에는 TestFlight가 더 적합합니다.
+## 허용 답변
 
-이 PC는 Windows 환경이라 Xcode 서명 및 Archive를 만들 수 없습니다. 따라서 현재 산출물에는 완성된 설치용 IPA가 포함되지 않습니다. 위 단계를 macOS/Xcode와 Apple Developer 계정이 있는 환경에서 완료해야 실제 설치 링크를 발급할 수 있습니다.
+`ㄱㅊ아`, `아현 걱정하지마`, `아현 잘할수있어`, `이애가 진짜`, `그런거 아니야`, `안돼`, `ㅇㄹㅅㄱ`, `ㄱㅇㅇ`, `아현 무슨일이야`, `ㅇㅎ`, `오구`, `웅` 중 하나만 답변으로 표시합니다. 예를 들어 맥락 없이 “좆됐어”라고 하면 무심한 반응 대신 `아현 무슨일이야`를 고르도록 지시합니다.
 
-브라우저 빌드는 Hugging Face Transformers.js와 다국어 문장 임베딩 모델을 사용해 한국어 입력을 12개 응답 의도 예시와 비교합니다. 모델 추론은 브라우저 안에서 수행하며 대화 내용을 외부 서버로 보내지 않습니다. 모델 파일은 Hugging Face에서 최초 실행 시 내려받으므로 처음에는 인터넷 연결과 다운로드 시간이 필요합니다. 모델 로딩 또는 추론에 실패하면 브라우저 안의 기존 규칙 분류로 응답합니다. iPhone 네이티브 앱은 기존 Apple Foundation Models 경로를 계속 사용합니다.
+## 배포 구성
 
-## 구현된 기능
+- 프론트엔드: GitHub Pages
+- 웹 AI 프록시: `cloudflare/src/index.ts` Cloudflare Worker
+- AI 분류 API: Google Gemini API
+- iPhone 앱 AI: Apple Foundation Models (네이티브 빌드)
 
-- 채팅 화면, 전송 중 상태, 오류 표시
-- Capacitor `LocalChat` 플러그인 계약
-- 여러 번 나눠 보낸 메시지를 사용자 입력으로 저장하고, 마지막 입력 5초 뒤 합쳐서 한 번 답변
-- 브라우저 빌드에서 Transformers.js 기반 다국어 의미 분류로 허용 답변 선택 (실패 시 로컬 규칙 기반 대체)
-- iPhone 네이티브 빌드에서 Swift로 합쳐진 메시지를 제한 분류하고 허용 답변 선택
-- Apple Foundation Models 온디바이스 분류 (지원 기기·OS·언어에서)
-- iPhone 앱 시작 시 온디바이스 AI에 실제 분류 요청을 보내 연결과 응답을 확인하고, 실패하면 오류 화면에서 채팅 진입을 차단
-- 온디바이스 모델의 목적·감정 분류 지침을 담은 `native/ios/on-device-model-guidance.md`
-- 앱 전용 `Application Support/local-chat.sqlite` SQLite 저장소
-- 대화 조회, 초기화
-
-## 등록된 답변 목록
-
-현재 답변은 다음 12개로 제한되어 있습니다: `ㄱㅊ아`, `아현 걱정하지마`, `아현 잘할수있어`, `이애가 진짜`, `그런거 아니야`, `안돼`, `ㅇㄹㅅㄱ`, `ㄱㅇㅇ`, `아현 무슨일이야`, `ㅇㅎ`, `오구`, `웅`. 브라우저 의미 분류 예시는 `src/browserIntentModel.ts`, 네이티브 분류기는 Swift `IntentAnalyzer`에서 조정할 수 있습니다.
-
-## 온디바이스 모델
-
-브라우저 빌드는 Transformers.js의 `feature-extraction` 파이프라인과 [`Xenova/paraphrase-multilingual-MiniLM-L12-v2`](https://huggingface.co/Xenova/paraphrase-multilingual-MiniLM-L12-v2) 양자화 모델을 사용합니다. 문장 임베딩 유사도로 허용된 의도만 선택합니다. 모델 가중치 파일은 약 399 MB이며 첫 실행 때 내려받습니다. [Transformers.js](https://huggingface.co/docs/transformers.js)는 브라우저 내부 추론을 지원합니다.
-
-iPhone 네이티브 빌드에서는 Swift의 `IntentAnalyzer`가 Apple Foundation Models 프레임워크의 `SystemLanguageModel`을 호출합니다. 시스템 모델은 iOS 26 이상과 Apple Intelligence 지원 및 모델 준비 상태가 필요하며, 한국어 로케일 지원 여부도 확인합니다. 입력 분석은 기기에서 실행됩니다. 모델이 불가용하거나 결과가 허용된 의도 코드와 일치하지 않으면 규칙 분류기로 처리합니다. 별도 모델 파일을 앱에 포함하지 않습니다.
-
-Apple 문서: [Foundation Models](https://developer.apple.com/documentation/FoundationModels), [모델 가용성](https://developer.apple.com/documentation/foundationmodels/systemlanguagemodel), [지원 로케일 확인](https://developer.apple.com/documentation/foundationmodels/systemlanguagemodel/supportslocale%28_%3A%29).
-
-iOS 앱은 운영체제 정책상 앱 코드가 임의로 앱 프로세스를 종료할 수 없습니다. 모델을 사용할 수 없을 때 오류 화면만 표시하고 대화 기능을 막으며, 사용자가 앱 전환 화면에서 앱을 닫도록 안내합니다. 브라우저에서는 AI 모델 로딩이 실패해도 규칙 기반 대체 응답으로 계속 사용할 수 있습니다.
-
-MCP 서버는 사용하지 않습니다. 앱 내부에서 Foundation Models를 직접 호출하므로 별도 도구 서버가 필요하지 않습니다. 다음 단계는 macOS/Xcode에서 앱을 생성하고 실제 iPhone에서 모델 동작을 확인하는 것입니다.
-
+브라우저 앱에서 모델이 생성한 자유 형식 답변은 사용하지 않습니다. 모델은 허용된 의도 코드만 선택하고, 표시 문자열은 앱/Worker의 고정 목록에서 가져옵니다.

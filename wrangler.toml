@@ -1,0 +1,8 @@
+name = "chat-jihun-gemini"
+main = "cloudflare/src/index.ts"
+compatibility_date = "2026-10-11"
+workers_dev = true
+
+[vars]
+GEMINI_MODEL = "gemini-3.1-flash-lite"
+ALLOWED_ORIGINS = "https://jomulagy.github.io,http://localhost:4173,http://localhost:5173"
