@@ -38,6 +38,28 @@ GitHub Pages는 정적 파일을 제공하므로 Gemini API 키를 프론트엔�
 
 `wrangler.toml`에서 모델과 허용 웹 주소를 설정할 수 있습니다. `ALLOWED_ORIGINS`에는 배포된 Pages 주소를 포함해야 합니다. 현재 기본 주소는 `https://jomulagy.github.io`입니다. 프로젝트가 `/chat-ji-hoon/` 하위 경로에 배포되어도 Origin은 도메인까지만 지정합니다. 별도 도메인을 쓰면 해당 Origin을 추가하고 다시 배포하세요.
 
+### 로컬에서 Worker 테스트
+
+저장소 루트에서 `.dev.vars.example`을 `.dev.vars`로 복사한 뒤 두 값을 실제 Gemini API 키와 무작위 접속 코드로 바꿉니다. `.dev.vars`는 `.gitignore`에 포함되어 Git에 올라가지 않습니다.
+
+```powershell
+Copy-Item .dev.vars.example .dev.vars
+```
+
+터미널 하나에서 Worker를 실행합니다.
+
+```sh
+pnpm dlx wrangler dev
+```
+
+다른 터미널에서는 Vite를 실행합니다.
+
+```sh
+pnpm dev
+```
+
+브라우저에서 `http://localhost:5173`을 열고 **AI 설정**에 Worker 주소 `http://localhost:8787`과 `.dev.vars`에 입력한 `APP_ACCESS_TOKEN`을 입력합니다. 미리보기 서버를 쓰는 경우 `http://localhost:4173`에서도 연결할 수 있습니다. 테스트가 끝나면 Worker 실행을 중단하세요.
+
 ### 무료 사용 및 개인정보
 
 Gemini API 무료 사용량과 제한은 모델 및 Google 정책에 따라 바뀔 수 있습니다. 무료 등급 요청은 Google 서비스 개선에 사용될 수 있으므로 민감한 개인정보나 비밀 대화는 입력하지 마세요. API 이용 조건과 최신 한도는 [Gemini API 가격 및 요금](https://ai.google.dev/gemini-api/docs/pricing), [API 키 보안 안내](https://ai.google.dev/gemini-api/docs/api-key), [Gemini API 추가 서비스 약관](https://ai.google.dev/gemini-api/terms?hl=ko)에서 확인하세요.
