@@ -1,0 +1,6 @@
+{
+  "appId": "com.jihun.chatjihun",
+  "appName": "CHAT 지훈띠",
+  "webDir": "dist",
+  "ios": { "contentInset": "automatic" }
+}
