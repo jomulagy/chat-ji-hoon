@@ -1,5 +1,3 @@
-import { Capacitor, registerPlugin } from '@capacitor/core';
-
 export type ChatMessage = {
   id: string;
   role: 'user' | 'service';
@@ -16,57 +14,54 @@ export interface LocalChatPlugin {
   getRuntimeStatus(): Promise<{ ready: boolean; modelReady: boolean; message: string }>;
 }
 
-const nativeChat = registerPlugin<LocalChatPlugin>('LocalChat');
-const storageKey = 'chat-kim-jihun-preview-messages';
-const proxyUrlKey = 'chat-kim-jihun-gemini-proxy-url';
-const proxyTokenKey = 'chat-kim-jihun-gemini-proxy-token';
+const configuredWorkerUrl = import.meta.env.VITE_GEMINI_WORKER_URL?.trim().replace(/\/+$/u, '') ?? '';
 const allowedReplies: Record<string, string> = {
   AFFIRMATIVE: '웅', COMFORT: '아현 걱정하지마', REASSURE: 'ㄱㅊ아', ENCOURAGE: '아현 잘할수있어',
   ASK_WHAT_HAPPENED: '아현 무슨일이야', DENY: '그런거 아니야', NO: '안돼', SURPRISE: 'ㅇㄹㅅㄱ',
   CUTE: 'ㄱㅇㅇ', SIGH: 'ㅇㅎ', AFFECTION: '오구', REACTION: '이애가 진짜',
 };
 
-function readPreviewMessages(): ChatMessage[] {
-  try { return JSON.parse(localStorage.getItem(storageKey) ?? '[]') as ChatMessage[]; }
-  catch { return []; }
+function workerEndpoint(path: '/health' | '/reply') {
+  // Local dev and preview use Vite's same-origin proxy. It reads .dev.vars on the server,
+  // so the local access token never enters browser code or localStorage.
+  return configuredWorkerUrl ? `${configuredWorkerUrl}${path}` : `/api${path}`;
+}
+function historyEndpoint() {
+  return configuredWorkerUrl ? `${configuredWorkerUrl}/messages` : '/api/messages';
 }
 
-export function getGeminiProxySettings() {
-  return {
-    url: localStorage.getItem(proxyUrlKey) ?? '',
-    token: localStorage.getItem(proxyTokenKey) ?? '',
-  };
+async function saveMessage(message: ChatMessage) {
+  const response = await fetch(historyEndpoint(), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(message),
+  });
+  if (!response.ok) throw new Error('채팅 기록을 저장하지 못했습니다. 저장 서버 연결을 확인해 주세요.');
 }
 
-export async function saveGeminiProxySettings(url: string, token: string) {
-  const normalizedUrl = url.trim().replace(/\/+$/u, '');
-  if (normalizedUrl) {
-    const parsed = new URL(normalizedUrl);
-    if (parsed.protocol !== 'https:' && parsed.hostname !== 'localhost') {
-      throw new Error('Worker 주소는 HTTPS 주소를 입력해 주세요.');
-    }
-    localStorage.setItem(proxyUrlKey, normalizedUrl);
-    localStorage.setItem(proxyTokenKey, token.trim());
-  } else {
-    localStorage.removeItem(proxyUrlKey);
-    localStorage.removeItem(proxyTokenKey);
-  }
+async function getBrowserMessages() {
+  const response = await fetch(historyEndpoint());
+  if (!response.ok) throw new Error('대화 기록을 불러오지 못했습니다. 저장 서버 연결을 확인해 주세요.');
+  const payload = await response.json() as { messages?: ChatMessage[] };
+  return payload.messages ?? [];
 }
 
-const browserPreview: LocalChatPlugin = {
+async function clearBrowserMessages() {
+  const response = await fetch(historyEndpoint(), { method: 'DELETE' });
+  if (!response.ok) throw new Error('대화 기록을 초기화하지 못했습니다.');
+}
+
+const browserChat: LocalChatPlugin = {
   async appendUserMessage({ text }) {
     const now = new Date().toISOString();
     const userMessage: ChatMessage = { id: crypto.randomUUID(), role: 'user', content: text, createdAt: now };
-    const messages = [...readPreviewMessages(), userMessage];
-    localStorage.setItem(storageKey, JSON.stringify(messages));
+    await saveMessage(userMessage);
     return { userMessage };
   },
   async generateReply({ text }) {
-    const { url, token } = getGeminiProxySettings();
-    if (!url || !token) throw new Error('Gemini Worker 주소와 접속 코드를 설정에서 입력해 주세요.');
-    const response = await fetch(`${url}/reply`, {
+    const response = await fetch(workerEndpoint('/reply'), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text }),
     });
     const payload = await response.json().catch(() => ({})) as { intent?: string; content?: string; error?: string };
@@ -74,28 +69,22 @@ const browserPreview: LocalChatPlugin = {
     if (typeof payload.intent !== 'string' || !Object.hasOwn(allowedReplies, payload.intent)) throw new Error('AI 서버가 허용된 의도를 반환하지 않았습니다.');
     const result = { intent: payload.intent, content: allowedReplies[payload.intent] };
     const serviceMessage: ChatMessage = { id: crypto.randomUUID(), role: 'service', content: result.content, intent: result.intent, createdAt: new Date().toISOString() };
-    localStorage.setItem(storageKey, JSON.stringify([...readPreviewMessages(), serviceMessage]));
+    await saveMessage(serviceMessage);
     return { serviceMessage };
   },
-  async getMessages() { return { messages: readPreviewMessages() }; },
-  async clearMessages() { localStorage.removeItem(storageKey); },
+  async getMessages() { return { messages: await getBrowserMessages() }; },
+  async clearMessages() { await clearBrowserMessages(); },
   async getRuntimeStatus() {
-    const { url, token } = getGeminiProxySettings();
-    if (!url || !token) return { ready: true, modelReady: false, message: 'Gemini Worker 연결 설정이 필요합니다' };
     try {
-      const response = await fetch(`${url}/health`, {
-        headers: { Authorization: `Bearer ${token}` },
-        signal: AbortSignal.timeout(8000),
-      });
+      const response = await fetch(workerEndpoint('/health'), { signal: AbortSignal.timeout(8000) });
       if (!response.ok) return { ready: true, modelReady: false, message: `Gemini Worker 연결 확인 실패 (${response.status})` };
       const payload = await response.json() as { ready?: boolean };
       if (!payload.ready) return { ready: true, modelReady: false, message: 'Gemini API 키가 Worker에 설정되지 않았습니다' };
-      return { ready: true, modelReady: true, message: 'Gemini API 연결됨 · 메시지는 인터넷을 통해 처리됩니다' };
+      return { ready: true, modelReady: true, message: `Gemini API 연결됨 · ${configuredWorkerUrl ? '클라우드 Worker' : '로컬 Worker'} 사용 중` };
     } catch {
-      return { ready: true, modelReady: false, message: 'Gemini Worker에 연결할 수 없습니다' };
+      return { ready: true, modelReady: false, message: 'Gemini Worker에 연결할 수 없습니다. Worker 실행 상태를 확인해 주세요.' };
     }
   },
 };
 
-export const isNativeRuntime = Capacitor.isNativePlatform();
-export const LocalChat = isNativeRuntime ? nativeChat : browserPreview;
+export const LocalChat = browserChat;

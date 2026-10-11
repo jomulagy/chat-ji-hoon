@@ -39,7 +39,14 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build mobile web app
-        run: pnpm run build
+        env:
+          VITE_GEMINI_WORKER_URL: ${{ vars.GEMINI_WORKER_URL }}
+        run: |
+          if [ -z "$VITE_GEMINI_WORKER_URL" ]; then
+            echo "Set the repository variable GEMINI_WORKER_URL to the deployed Cloudflare Worker URL."
+            exit 1
+          fi
+          pnpm run build
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5

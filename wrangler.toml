@@ -1,8 +1,24 @@
 name = "chat-jihun-gemini"
 main = "cloudflare/src/index.ts"
-compatibility_date = "2026-10-11"
+compatibility_date = "2026-10-06"
 workers_dev = true
 
 [vars]
 GEMINI_MODEL = "gemini-3.1-flash-lite"
 ALLOWED_ORIGINS = "https://jomulagy.github.io,http://localhost:4173,http://localhost:5173"
+
+[[ratelimits]]
+name = "REPLY_RATE_LIMIT"
+namespace_id = "735101"
+
+  [ratelimits.simple]
+  limit = 30
+  period = 60
+
+[[durable_objects.bindings]]
+name = "CHAT_HISTORY"
+class_name = "ChatHistory"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ChatHistory"]
