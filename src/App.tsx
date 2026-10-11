@@ -18,7 +18,6 @@ export default function App() {
   const appBasePath = getAppBasePath();
   const messagesPage = window.location.pathname.replace(/\/+$/u, '').endsWith('/messages');
   const homeUrl = `${appBasePath || ''}/`;
-  const messagesUrl = `${appBasePath || ''}/messages`;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [text, setText] = useState('');
   const [replying, setReplying] = useState(false);
@@ -125,20 +124,29 @@ export default function App() {
   </main>;
 
   if (messagesPage) return <main className="shell history-shell">
-    <header><div><h1>서버 대화 기록</h1><p>Worker API에서 불러온 기록</p></div><a className="clear" href={homeUrl}>채팅으로</a></header>
-    {error ? <div className="error" role="alert">{error}</div> : <section className="history-content" aria-live="polite">
-      {messages.length === 0 ? <p className="history-empty">저장된 대화 기록이 없습니다.</p> : <pre className="history-json">{JSON.stringify({ messages }, null, 2)}</pre>}
-    </section>}
+    <header><div><h1>CHAT 지훈띠</h1><p>서버 대화 기록</p></div><a className="clear" href={homeUrl}>채팅으로</a></header>
+    <section className="conversation history-conversation" aria-live="polite">
+      {error ? <div className="error" role="alert">{error}</div> : messages.length === 0 ? <div className="empty"><div className="spark">✳</div><h2>저장된 기록이 없어요</h2><p>대화 기록이 여기에 표시됩니다.</p></div> : messages.map((m, index) => {
+        const previous = messages[index - 1];
+        const next = messages[index + 1];
+        const joinsPrevious = m.role === 'user' && previous?.role === 'user';
+        const joinsNext = m.role === 'user' && next?.role === 'user';
+        return <article key={m.id} className={`message ${m.role}${joinsPrevious ? ' fragment-previous' : ''}${joinsNext ? ' fragment-next' : ''}`}><div className="bubble">{m.content}</div><time>{new Date(m.createdAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}</time></article>;
+      })}
+    </section>
     <footer><button className="clear" onClick={() => window.location.reload()}>새로고침</button> · {messages.length}개 메시지</footer>
   </main>;
 
   return <main className="shell">
-    <header><div><h1>CHAT 지훈띠</h1></div><nav className="header-actions"><a className="clear" href={messagesUrl}>서버 기록</a><button className="clear" onClick={() => void clear()} disabled={replying || waitingForTurn || messages.length === 0}>기록 지우기</button></nav></header>
+    <header><div><h1>CHAT 지훈띠</h1></div><nav className="header-actions"><button className="clear" onClick={() => void clear()} disabled={replying || waitingForTurn || messages.length === 0}>기록 지우기</button></nav></header>
     <section ref={conversation} className="conversation" aria-live="polite">
       {messages.length === 0 ? <div className="empty"><div className="spark">✳</div><h2>아현 무슨일이야</h2><p>메시지를 보내면 Gemini AI가 내용을 분석해 답변합니다.</p></div> : messages.map((m, index) => {
         const next = messages[index + 1];
+        const previous = messages[index - 1];
         const showTime = m.role !== 'user' || !next || next.role !== 'user' || !isSameMinute(m.createdAt, next.createdAt);
-        return <article key={m.id} className={`message ${m.role}`}><div className="bubble">{m.content}</div>{showTime && <time>{new Date(m.createdAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}</time>}</article>;
+        const joinsPrevious = m.role === 'user' && previous?.role === 'user';
+        const joinsNext = m.role === 'user' && next?.role === 'user';
+        return <article key={m.id} className={`message ${m.role}${joinsPrevious ? ' fragment-previous' : ''}${joinsNext ? ' fragment-next' : ''}`}><div className="bubble">{m.content}</div>{showTime && <time>{new Date(m.createdAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}</time>}</article>;
       })}
       {waitingForTurn && !replying && <div className="thinking">말을 이어서 보내세요 · 마지막 메시지 후 3초 뒤 답변<span>•••</span></div>}
       {replying && <div className="thinking">말씀을 모아서 답변을 만들고 있어요<span>•••</span></div>}
