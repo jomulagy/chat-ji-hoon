@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { LocalChat, type ChatMessage } from './localChat';
 import './style.css';
 
+const CHAT_CLEAR_CUTOFF_KEY = 'chat-jihun-cleared-through-message-id';
+
 function isSameMinute(first: string, second: string) {
   const a = new Date(first);
   const b = new Date(second);
@@ -19,6 +21,7 @@ export default function App() {
   const messagesPage = window.location.pathname.replace(/\/+$/u, '').endsWith('/messages');
   const homeUrl = `${appBasePath || ''}/`;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [chatClearCutoff, setChatClearCutoff] = useState(() => window.localStorage.getItem(CHAT_CLEAR_CUTOFF_KEY) ?? '');
   const [text, setText] = useState('');
   const [replying, setReplying] = useState(false);
   const [waitingForTurn, setWaitingForTurn] = useState(false);
@@ -29,6 +32,8 @@ export default function App() {
   const pendingFragments = useRef<string[]>([]);
   const replyTimer = useRef<number | null>(null);
   const replyingRef = useRef(false);
+  const cutoffIndex = messages.findIndex((message) => message.id === chatClearCutoff);
+  const chatMessages = cutoffIndex >= 0 ? messages.slice(cutoffIndex + 1) : messages;
 
   useEffect(() => {
     let active = true;
@@ -105,12 +110,16 @@ export default function App() {
     }
   }
 
-  async function clear() {
+  function clear() {
     if (replyTimer.current !== null) window.clearTimeout(replyTimer.current);
     replyTimer.current = null;
     pendingFragments.current = [];
-    try { await LocalChat.clearMessages(); setMessages([]); setError(''); }
-    catch { setError('대화 기록을 초기화하지 못했습니다. 저장 서버 연결을 확인해 주세요.'); }
+    const lastMessageId = messages.at(-1)?.id;
+    if (lastMessageId) {
+      window.localStorage.setItem(CHAT_CLEAR_CUTOFF_KEY, lastMessageId);
+      setChatClearCutoff(lastMessageId);
+    }
+    setError('');
   }
 
   if (booting) return <main className="splash" aria-busy="true" aria-live="polite">
@@ -138,11 +147,11 @@ export default function App() {
   </main>;
 
   return <main className="shell">
-    <header><div><h1>CHAT 지훈띠</h1></div><nav className="header-actions"><button className="clear" onClick={() => void clear()} disabled={replying || waitingForTurn || messages.length === 0}>기록 지우기</button></nav></header>
+    <header><div><h1>CHAT 지훈띠</h1></div><nav className="header-actions"><button className="clear" onClick={clear} disabled={replying || waitingForTurn || chatMessages.length === 0}>채팅창 비우기</button></nav></header>
     <section ref={conversation} className="conversation" aria-live="polite">
-      {messages.length === 0 ? <div className="empty"><div className="spark">✳</div><h2>아현 무슨일이야</h2><p>메시지를 보내면 Gemini AI가 내용을 분석해 답변합니다.</p></div> : messages.map((m, index) => {
-        const next = messages[index + 1];
-        const previous = messages[index - 1];
+      {chatMessages.length === 0 ? <div className="empty"><div className="spark">✳</div><h2>아현 무슨일이야</h2><p>메시지를 보내면 Gemini AI가 내용을 분석해 답변합니다.</p></div> : chatMessages.map((m, index) => {
+        const next = chatMessages[index + 1];
+        const previous = chatMessages[index - 1];
         const showTime = m.role !== 'user' || !next || next.role !== 'user' || !isSameMinute(m.createdAt, next.createdAt);
         const joinsPrevious = m.role === 'user' && previous?.role === 'user';
         const joinsNext = m.role === 'user' && next?.role === 'user';
