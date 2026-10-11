@@ -30,8 +30,23 @@ function historyEndpoint() {
   return configuredWorkerUrl ? `${configuredWorkerUrl}/messages` : '/api/messages';
 }
 
+async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = 10000) {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error('요청 시간이 초과되었습니다. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.');
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
 async function saveMessage(message: ChatMessage) {
-  const response = await fetch(historyEndpoint(), {
+  const response = await fetchWithTimeout(historyEndpoint(), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(message),
@@ -40,14 +55,14 @@ async function saveMessage(message: ChatMessage) {
 }
 
 async function getBrowserMessages() {
-  const response = await fetch(historyEndpoint());
+  const response = await fetchWithTimeout(historyEndpoint());
   if (!response.ok) throw new Error('대화 기록을 불러오지 못했습니다. 저장 서버 연결을 확인해 주세요.');
   const payload = await response.json() as { messages?: ChatMessage[] };
   return payload.messages ?? [];
 }
 
 async function clearBrowserMessages() {
-  const response = await fetch(historyEndpoint(), { method: 'DELETE' });
+  const response = await fetchWithTimeout(historyEndpoint(), { method: 'DELETE' });
   if (!response.ok) throw new Error('대화 기록을 초기화하지 못했습니다.');
 }
 
@@ -59,11 +74,11 @@ const browserChat: LocalChatPlugin = {
     return { userMessage };
   },
   async generateReply({ text }) {
-    const response = await fetch(workerEndpoint('/reply'), {
+    const response = await fetchWithTimeout(workerEndpoint('/reply'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text }),
-    });
+    }, 25000);
     const payload = await response.json().catch(() => ({})) as { intent?: string; content?: string; error?: string };
     if (!response.ok) throw new Error(payload.error ?? `AI 요청 실패 (${response.status})`);
     if (typeof payload.intent !== 'string' || !Object.hasOwn(allowedReplies, payload.intent)) throw new Error('AI 서버가 허용된 의도를 반환하지 않았습니다.');
@@ -76,7 +91,7 @@ const browserChat: LocalChatPlugin = {
   async clearMessages() { await clearBrowserMessages(); },
   async getRuntimeStatus() {
     try {
-      const response = await fetch(workerEndpoint('/health'), { signal: AbortSignal.timeout(8000) });
+      const response = await fetchWithTimeout(workerEndpoint('/health'), {}, 8000);
       if (!response.ok) return { ready: true, modelReady: false, message: `Gemini Worker 연결 확인 실패 (${response.status})` };
       const payload = await response.json() as { ready?: boolean };
       if (!payload.ready) return { ready: true, modelReady: false, message: 'Gemini API 키가 Worker에 설정되지 않았습니다' };

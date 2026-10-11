@@ -47,9 +47,22 @@ export default function App() {
       const [historyResult, runtimeResult] = await Promise.all([historyPromise, runtimePromise, minimumSplash]);
       if (!active) return;
       if (runtimeResult) setRuntimeMessage(runtimeResult.message);
-      if (historyResult.ok) setMessages(historyResult.value.messages);
+      if (historyResult.ok) {
+        const loadedMessages = historyResult.value.messages;
+        setMessages(loadedMessages);
+        if (!messagesPage) {
+          let lastServiceIndex = -1;
+          loadedMessages.forEach((message, index) => {
+            if (message.role === 'service') lastServiceIndex = index;
+          });
+          const unanswered = loadedMessages.slice(lastServiceIndex + 1)
+            .filter((message) => message.role === 'user');
+          if (unanswered.length > 0) pendingFragments.current.push(...unanswered.map((message) => message.content));
+        }
+      }
       else setError(historyResult.reason instanceof Error ? historyResult.reason.message : '대화 기록을 불러오지 못했습니다.');
       setBooting(false);
+      if (historyResult.ok && !messagesPage && pendingFragments.current.length > 0) scheduleReply();
     }
     void initialize();
     return () => { active = false; };
@@ -79,19 +92,29 @@ export default function App() {
     setReplying(true);
     setWaitingForTurn(false);
     setError('');
-    let failed = false;
+    let succeeded = false;
     try {
-      const { serviceMessage } = await LocalChat.generateReply({ text: batch.join('\n') });
-      setMessages((items) => [...items, serviceMessage]);
+      let lastError: unknown;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          const { serviceMessage } = await LocalChat.generateReply({ text: batch.join('\n') });
+          setMessages((items) => [...items, serviceMessage]);
+          succeeded = true;
+          break;
+        } catch (e) {
+          lastError = e;
+          if (attempt === 0) await new Promise<void>((resolve) => window.setTimeout(resolve, 1000));
+        }
+      }
+      if (!succeeded) throw lastError;
     } catch (e) {
-      failed = true;
       pendingFragments.current.unshift(...batch);
       setError(e instanceof Error ? e.message : '답변을 만들지 못했습니다. 메시지를 다시 보내 주세요.');
-      setWaitingForTurn(true);
+      setWaitingForTurn(false);
     } finally {
       replyingRef.current = false;
       setReplying(false);
-      if (pendingFragments.current.length > 0 && !failed) scheduleReply();
+      if (pendingFragments.current.length > 0 && succeeded) scheduleReply();
     }
   }
 
@@ -160,7 +183,7 @@ export default function App() {
       {waitingForTurn && !replying && <div className="thinking">말을 이어서 보내세요 · 마지막 메시지 후 3초 뒤 답변<span>•••</span></div>}
       {replying && <div className="thinking">말씀을 모아서 답변을 만들고 있어요<span>•••</span></div>}
     </section>
-    {error && <div className="error" role="alert">{error}</div>}
+    {error && <div className="error" role="alert">{error}{pendingFragments.current.length > 0 && <button className="clear" type="button" onClick={() => { setError(''); void flushReply(); }}>다시 시도</button>}</div>}
     <form className="composer" onSubmit={(e) => { e.preventDefault(); void send(); }}><input value={text} onChange={(e) => setText(e.target.value)} placeholder="메시지를 입력하세요" aria-label="메시지" maxLength={2000} /><button type="submit" disabled={!text.trim()} aria-label="전송">↑</button></form>
     <footer>{runtimeMessage}</footer>
   </main>;
