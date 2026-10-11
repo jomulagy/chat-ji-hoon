@@ -12,6 +12,8 @@ API는 다음과 같습니다.
 - `POST /messages`: 메시지 JSON 한 건 저장
 - `DELETE /messages`: 대화 기록 전체 초기화
 
+GitHub Pages에서 `<Pages 앱 주소>/messages`를 열거나 채팅 화면의 **서버 기록**을 누르면 앱이 Worker API를 호출해 JSON 기록을 표시합니다. Pages 배포에서 `404.html`을 사용해 앱 경로를 지원합니다.
+
 로컬에서는 저장소 루트에서 Worker와 웹 앱을 실행합니다.
 
 ```powershell

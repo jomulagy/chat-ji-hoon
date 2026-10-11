@@ -48,6 +48,9 @@ jobs:
           fi
           pnpm run build
 
+      - name: Enable GitHub Pages app routes
+        run: cp dist/index.html dist/404.html
+
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
 

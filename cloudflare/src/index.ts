@@ -73,6 +73,7 @@ Allowed intents: ${Object.keys(replies).join(', ')}.
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const headers = getCorsHeaders(request, env);
+    const url = new URL(request.url);
     const origin = request.headers.get('Origin');
     const allowedOrigins = (env.ALLOWED_ORIGINS ?? '').split(',').map((value) => value.trim()).filter(Boolean);
     if ((origin && !allowedOrigins.includes(origin)) || (!origin && !env.APP_ACCESS_TOKEN)) {
@@ -80,7 +81,6 @@ export default {
     }
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers });
 
-    const url = new URL(request.url);
     if (!['/health', '/reply', '/messages'].includes(url.pathname)) return json({ error: '경로를 찾을 수 없습니다.' }, 404, headers);
     if (!isAuthorized(request, env)) return json({ error: 'Worker 접속 코드가 올바르지 않습니다.' }, 401, headers);
     if (url.pathname === '/messages') {

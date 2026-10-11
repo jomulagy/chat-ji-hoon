@@ -9,7 +9,16 @@ function isSameMinute(first: string, second: string) {
     a.getDate() === b.getDate() && a.getHours() === b.getHours() && a.getMinutes() === b.getMinutes();
 }
 
+function getAppBasePath() {
+  const path = window.location.pathname.replace(/\/+$/u, '');
+  return path.endsWith('/messages') ? path.slice(0, -'/messages'.length) : path;
+}
+
 export default function App() {
+  const appBasePath = getAppBasePath();
+  const messagesPage = window.location.pathname.replace(/\/+$/u, '').endsWith('/messages');
+  const homeUrl = `${appBasePath || ''}/`;
+  const messagesUrl = `${appBasePath || ''}/messages`;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [text, setText] = useState('');
   const [replying, setReplying] = useState(false);
@@ -25,14 +34,16 @@ export default function App() {
   useEffect(() => {
     let active = true;
     async function initialize() {
-      const [historyResult, runtimeResult] = await Promise.allSettled([
-        LocalChat.getMessages(),
-        LocalChat.getRuntimeStatus(),
-        new Promise((resolve) => window.setTimeout(resolve, 800)),
-      ]);
+      const historyPromise = LocalChat.getMessages().then(
+        (value) => ({ ok: true as const, value }),
+        (reason: unknown) => ({ ok: false as const, reason }),
+      );
+      const runtimePromise = messagesPage ? Promise.resolve(null) : LocalChat.getRuntimeStatus();
+      const minimumSplash = messagesPage ? Promise.resolve() : new Promise<void>((resolve) => window.setTimeout(resolve, 800));
+      const [historyResult, runtimeResult] = await Promise.all([historyPromise, runtimePromise, minimumSplash]);
       if (!active) return;
-      if (runtimeResult.status === 'fulfilled') setRuntimeMessage(runtimeResult.value.message);
-      if (historyResult.status === 'fulfilled') setMessages(historyResult.value.messages);
+      if (runtimeResult) setRuntimeMessage(runtimeResult.message);
+      if (historyResult.ok) setMessages(historyResult.value.messages);
       else setError(historyResult.reason instanceof Error ? historyResult.reason.message : '대화 기록을 불러오지 못했습니다.');
       setBooting(false);
     }
@@ -113,8 +124,16 @@ export default function App() {
     </div>
   </main>;
 
+  if (messagesPage) return <main className="shell history-shell">
+    <header><div><h1>서버 대화 기록</h1><p>Worker API에서 불러온 기록</p></div><a className="clear" href={homeUrl}>채팅으로</a></header>
+    {error ? <div className="error" role="alert">{error}</div> : <section className="history-content" aria-live="polite">
+      {messages.length === 0 ? <p className="history-empty">저장된 대화 기록이 없습니다.</p> : <pre className="history-json">{JSON.stringify({ messages }, null, 2)}</pre>}
+    </section>}
+    <footer><button className="clear" onClick={() => window.location.reload()}>새로고침</button> · {messages.length}개 메시지</footer>
+  </main>;
+
   return <main className="shell">
-    <header><div><h1>CHAT 지훈띠</h1></div><button className="clear" onClick={() => void clear()} disabled={replying || waitingForTurn || messages.length === 0}>기록 지우기</button></header>
+    <header><div><h1>CHAT 지훈띠</h1></div><nav className="header-actions"><a className="clear" href={messagesUrl}>서버 기록</a><button className="clear" onClick={() => void clear()} disabled={replying || waitingForTurn || messages.length === 0}>기록 지우기</button></nav></header>
     <section ref={conversation} className="conversation" aria-live="polite">
       {messages.length === 0 ? <div className="empty"><div className="spark">✳</div><h2>아현 무슨일이야</h2><p>메시지를 보내면 Gemini AI가 내용을 분석해 답변합니다.</p></div> : messages.map((m, index) => {
         const next = messages[index + 1];
