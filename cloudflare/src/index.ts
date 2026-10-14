@@ -29,6 +29,13 @@ const replies = {
 } as const;
 
 type Intent = keyof typeof replies;
+type ChatMessageRecord = {
+  id: string;
+  role: 'service';
+  content: string;
+  intent: Intent;
+  createdAt: string;
+};
 
 const responseSchema = {
   type: 'OBJECT',
@@ -125,14 +132,30 @@ export default {
     if (contentLength > 12_000) return json({ error: '메시지가 너무 깁니다.' }, 413, headers);
 
     let text: unknown;
+    let requestId: unknown;
     try {
-      const body = await request.json() as { text?: unknown };
+      const body = await request.json() as { text?: unknown; requestId?: unknown };
       text = body.text;
+      requestId = body.requestId;
     } catch {
       return json({ error: '요청 내용을 읽지 못했습니다.' }, 400, headers);
     }
     if (typeof text !== 'string' || !text.trim()) return json({ error: '분석할 메시지를 입력해 주세요.' }, 400, headers);
     if (text.length > 6000) return json({ error: '메시지는 6000자 이하로 입력해 주세요.' }, 413, headers);
+    if (requestId !== undefined && (typeof requestId !== 'string' || !requestId.trim() || requestId.length > 100)) {
+      return json({ error: '요청 식별자가 올바르지 않습니다.' }, 400, headers);
+    }
+
+    const historyId = env.CHAT_HISTORY.idFromName('shared-chat-history');
+    const history = env.CHAT_HISTORY.get(historyId);
+    const replyMessageId = typeof requestId === 'string' ? `service:${requestId}` : '';
+    if (replyMessageId) {
+      const cachedResponse = await history.fetch(new Request(`https://history.internal/reply?id=${encodeURIComponent(replyMessageId)}`));
+      if (cachedResponse.ok) {
+        const { serviceMessage } = await cachedResponse.json() as { serviceMessage: ChatMessageRecord };
+        return json({ intent: serviceMessage.intent, content: serviceMessage.content, serviceMessage }, 200, headers);
+      }
+    }
 
     const model = env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
     let upstream: Response;
@@ -173,6 +196,17 @@ export default {
     } catch {
       return json({ error: 'AI 응답을 확인하지 못했습니다. 다시 시도해 주세요.' }, 502, headers);
     }
+    if (replyMessageId) {
+      const createdAt = new Date().toISOString();
+      const saveResponse = await history.fetch(new Request('https://history.internal/reply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: replyMessageId, intent, content: replies[intent], createdAt }),
+      }));
+      if (!saveResponse.ok) return json({ error: '답변을 기록하지 못했습니다. 다시 시도해 주세요.' }, 503, headers);
+      const { serviceMessage } = await saveResponse.json() as { serviceMessage: ChatMessageRecord };
+      return json({ intent: serviceMessage.intent, content: serviceMessage.content, serviceMessage }, 200, headers);
+    }
     return json({ intent, content: replies[intent] }, 200, headers);
   },
 };
@@ -190,6 +224,40 @@ export class ChatHistory extends DurableObject {
   }
 
   async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    if (request.method === 'GET' && url.pathname === '/reply') {
+      const id = url.searchParams.get('id');
+      if (!id || id.length > 110) return Response.json({ error: 'Invalid reply id.' }, { status: 400 });
+      const row = this.ctx.storage.sql.exec<{ id: string; role: 'user' | 'service'; content: string; intent: string | null; created_at: string }>(
+        'SELECT id, role, content, intent, created_at FROM messages WHERE id = ? AND role = ? LIMIT 1', id, 'service',
+      ).toArray()[0];
+      if (!row) return Response.json({ error: 'Reply not found.' }, { status: 404 });
+      const { created_at, intent, ...message } = row;
+      return Response.json({ serviceMessage: { ...message, ...(intent ? { intent } : {}), createdAt: created_at } }, { headers: { 'Cache-Control': 'no-store' } });
+    }
+    if (request.method === 'POST' && url.pathname === '/reply') {
+      let input: unknown;
+      try { input = await request.json(); } catch { return Response.json({ error: 'Request body must be valid JSON.' }, { status: 400 }); }
+      if (typeof input !== 'object' || input === null) return Response.json({ error: 'Invalid reply.' }, { status: 400 });
+      const reply = input as { id?: unknown; intent?: unknown; content?: unknown; createdAt?: unknown };
+      if (typeof reply.id !== 'string' || !reply.id.startsWith('service:') || reply.id.length > 110 ||
+          typeof reply.intent !== 'string' || !Object.hasOwn(replies, reply.intent) || typeof reply.content !== 'string' ||
+          typeof reply.createdAt !== 'string' || Number.isNaN(Date.parse(reply.createdAt))) {
+        return Response.json({ error: 'Invalid reply.' }, { status: 400 });
+      }
+      this.ctx.storage.transactionSync(() => {
+        this.ctx.storage.sql.exec(
+          'INSERT OR IGNORE INTO messages (id, role, content, intent, created_at) VALUES (?, ?, ?, ?, ?)',
+          reply.id, 'service', reply.content, reply.intent, reply.createdAt,
+        );
+      });
+      const row = this.ctx.storage.sql.exec<{ id: string; role: 'user' | 'service'; content: string; intent: string | null; created_at: string }>(
+        'SELECT id, role, content, intent, created_at FROM messages WHERE id = ? AND role = ? LIMIT 1', reply.id, 'service',
+      ).toArray()[0];
+      if (!row) return Response.json({ error: 'Reply was not saved.' }, { status: 500 });
+      const { created_at, intent, ...message } = row;
+      return Response.json({ serviceMessage: { ...message, ...(intent ? { intent } : {}), createdAt: created_at } }, { headers: { 'Cache-Control': 'no-store' } });
+    }
     if (request.method === 'GET') {
       const rows = this.ctx.storage.sql.exec<{ id: string; role: 'user' | 'service'; content: string; intent: string | null; created_at: string }>(
         'SELECT id, role, content, intent, created_at FROM messages ORDER BY created_at, rowid',

@@ -29,7 +29,7 @@ export default function App() {
   const [runtimeMessage, setRuntimeMessage] = useState('Gemini Worker 연결을 확인하고 있어요');
   const [error, setError] = useState('');
   const conversation = useRef<HTMLElement>(null);
-  const pendingFragments = useRef<string[]>([]);
+  const pendingFragments = useRef<ChatMessage[]>([]);
   const replyTimer = useRef<number | null>(null);
   const replyingRef = useRef(false);
   const cutoffIndex = messages.findIndex((message) => message.id === chatClearCutoff);
@@ -57,7 +57,7 @@ export default function App() {
           });
           const unanswered = loadedMessages.slice(lastServiceIndex + 1)
             .filter((message) => message.role === 'user');
-          if (unanswered.length > 0) pendingFragments.current.push(...unanswered.map((message) => message.content));
+          if (unanswered.length > 0) pendingFragments.current.push(...unanswered);
         }
       }
       else setError(historyResult.reason instanceof Error ? historyResult.reason.message : '대화 기록을 불러오지 못했습니다.');
@@ -94,19 +94,12 @@ export default function App() {
     setError('');
     let succeeded = false;
     try {
-      let lastError: unknown;
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        try {
-          const { serviceMessage } = await LocalChat.generateReply({ text: batch.join('\n') });
-          setMessages((items) => [...items, serviceMessage]);
-          succeeded = true;
-          break;
-        } catch (e) {
-          lastError = e;
-          if (attempt === 0) await new Promise<void>((resolve) => window.setTimeout(resolve, 1000));
-        }
-      }
-      if (!succeeded) throw lastError;
+      const { serviceMessage } = await LocalChat.generateReply({
+        text: batch.map((message) => message.content).join('\n'),
+        requestId: batch[0].id,
+      });
+      setMessages((items) => items.some((message) => message.id === serviceMessage.id) ? items : [...items, serviceMessage]);
+      succeeded = true;
     } catch (e) {
       pendingFragments.current.unshift(...batch);
       setError(e instanceof Error ? e.message : '답변을 만들지 못했습니다. 메시지를 다시 보내 주세요.');
@@ -125,7 +118,7 @@ export default function App() {
     try {
       const { userMessage } = await LocalChat.appendUserMessage({ text: value });
       setMessages((items) => [...items, userMessage]);
-      pendingFragments.current.push(value);
+      pendingFragments.current.push(userMessage);
       scheduleReply();
     } catch (e) {
       setError(e instanceof Error ? e.message : '메시지를 처리하지 못했습니다.');

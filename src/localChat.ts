@@ -8,7 +8,7 @@ export type ChatMessage = {
 
 export interface LocalChatPlugin {
   appendUserMessage(options: { text: string }): Promise<{ userMessage: ChatMessage }>;
-  generateReply(options: { text: string }): Promise<{ serviceMessage: ChatMessage }>;
+  generateReply(options: { text: string; requestId: string }): Promise<{ serviceMessage: ChatMessage }>;
   getMessages(): Promise<{ messages: ChatMessage[] }>;
   clearMessages(): Promise<void>;
   getRuntimeStatus(): Promise<{ ready: boolean; modelReady: boolean; message: string }>;
@@ -74,18 +74,37 @@ const browserChat: LocalChatPlugin = {
     await saveMessage(userMessage);
     return { userMessage };
   },
-  async generateReply({ text }) {
-    const response = await fetchWithTimeout(workerEndpoint('/reply'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }),
-    }, 25000);
-    const payload = await response.json().catch(() => ({})) as { intent?: string; content?: string; error?: string };
+  async generateReply({ text, requestId }) {
+    let response: Response;
+    try {
+      response = await fetchWithTimeout(workerEndpoint('/reply'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, requestId }),
+      }, 25000);
+    } catch (error) {
+      // The Worker may have persisted the reply just before the browser timed out.
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        const saved = await getBrowserMessages().catch(() => []);
+        const savedReply = saved.find((message) => message.id === `service:${requestId}`);
+        if (savedReply) return { serviceMessage: savedReply };
+        if (attempt < 3) await new Promise<void>((resolve) => window.setTimeout(resolve, 500));
+      }
+      throw error;
+    }
+    const payload = await response.json().catch(() => ({})) as {
+      intent?: string; content?: string; error?: string; serviceMessage?: ChatMessage;
+    };
     if (!response.ok) throw new Error(payload.error ?? `AI 요청 실패 (${response.status})`);
     if (typeof payload.intent !== 'string' || !Object.hasOwn(allowedReplies, payload.intent)) throw new Error('AI 서버가 허용된 의도를 반환하지 않았습니다.');
-    const result = { intent: payload.intent, content: allowedReplies[payload.intent] };
-    const serviceMessage: ChatMessage = { id: crypto.randomUUID(), role: 'service', content: result.content, intent: result.intent, createdAt: new Date().toISOString() };
-    await saveMessage(serviceMessage);
+    const serviceMessage = payload.serviceMessage?.id === `service:${requestId}` && payload.serviceMessage.role === 'service'
+      ? payload.serviceMessage
+      : {
+          id: `service:${requestId}`, role: 'service' as const, content: allowedReplies[payload.intent],
+          intent: payload.intent, createdAt: new Date().toISOString(),
+        };
+    // Compatibility with a Worker version that still returns intent/content only.
+    if (!payload.serviceMessage) await saveMessage(serviceMessage);
     return { serviceMessage };
   },
   async getMessages() { return { messages: await getBrowserMessages() }; },
