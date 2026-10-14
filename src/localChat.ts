@@ -16,7 +16,8 @@ export interface LocalChatPlugin {
 
 const configuredWorkerUrl = import.meta.env.VITE_GEMINI_WORKER_URL?.trim().replace(/\/+$/u, '') ?? '';
 const allowedReplies: Record<string, string> = {
-  AFFIRMATIVE: '웅', COMFORT: '아현 걱정하지마', REASSURE: 'ㄱㅊ아', ENCOURAGE: '아현 잘할수있어',
+  AFFIRMATIVE: '웅', ACKNOWLEDGE: '알았어', APOLOGY: '미안해', COMFORT: '아현 걱정하지마',
+  REASSURE: 'ㄱㅊ아', CHECK_IN: '아현 괜찮아?', ENCOURAGE: '아현 잘할수있어',
   ASK_WHAT_HAPPENED: '아현 무슨일이야', DENY: '그런거 아니야', NO: '안돼', SURPRISE: 'ㅇㄹㅅㄱ',
   CUTE: 'ㄱㅇㅇ', SIGH: 'ㅇㅎ', AFFECTION: '오구', LOVE_BACK: '나도 사랑해', REACTION: '이애가 진짜',
 };
