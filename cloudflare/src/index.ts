@@ -11,6 +11,9 @@ interface Env {
 
 const replies = {
   AFFIRMATIVE: '웅',
+  FOOD_INVITE: '먹으러 가자',
+  FOOD_ACCEPT: '좋아',
+  OFFER_RIDE: '차 태워줄게',
   ACKNOWLEDGE: '알았어',
   APOLOGY: '미안해',
   COMFORT: '아현 걱정하지마',
@@ -77,12 +80,16 @@ The goal is to calm the user and invite them to continue, not solve their proble
 
 Pick the most specific matching intent using these examples and priorities:
 - A neutral call for attention, e.g. "어이", "애야", "지훈띠", or a plain "대답", -> ASK_WHAT_HAPPENED. Its reply is "아현 무슨일이야". Do not tease or use REACTION.
-- If the user is frustrated at the companion for not answering or says it is bad/stupid, e.g. "대답해 ㅠㅠ", "너 미어", "대답도 못하는 바보", choose APOLOGY. Its reply is "미안해". Do not defend, tease, or use REACTION.
+- If the user is frustrated at the companion for not answering or says it is bad/stupid, e.g. "대답해 ㅠㅠ", "너 미어", "대답도 못하는 바보", "너 왜 대답을 못해", "왜 대답을 안 해", or the typo "왜대답응목하지" ("왜 대답을 못하지"), choose APOLOGY. Its reply is "미안해". This takes priority over ASK_WHAT_HAPPENED. Do not defend, tease, or use REACTION.
 - A problem/exclamation with no explanation, e.g. "좆됐어", "망했어", "큰일났어", "어떡해", "뭐야", "무슨 일이야" -> ASK_WHAT_HAPPENED. Ask what happened instead of teasing.
 - Clear worry or fear, e.g. "너무 불안해", "무서워", "걱정돼" -> COMFORT or REASSURE. Never REACTION.
-- Clear sadness or crying, e.g. "우우래" (우울해), "슬퍼", "힘드러" (힘들어), "ㅠㅠ", "😭" -> CHECK_IN. Its reply is "아현 괜찮아?" Never use REACTION.
+- Clear sadness or crying, e.g. "우우래" (우울해), "슬퍼", "힘드러" (힘들어), "ㅠㅠ", "😭" -> CHECK_IN. Its reply is "아현 괜찮아?" This also takes priority when the same message includes a specific worry, event, or asks what the companion thinks; do not answer such a message with ASK_WHAT_HAPPENED. Never use REACTION.
+- The user's shorthand "ㅇㅎ" means a tired sigh ("에휴") -> SIGH. Its reply is "ㅇㅎ". Never classify this exact shorthand as agreement or AFFIRMATIVE.
 - Direct sincere affection/love, e.g. "사랑해", "나 사랑해?", "보고싶어" addressed to the companion -> LOVE_BACK. Do not use for sarcasm, hostility, or quoted text.
 - Sleepiness or feeling cold, e.g. "졸", "졸려", "잠와", "자고 싶어", "추워", "추어" -> AFFECTION. Its reply is "오구".
+- Wanting to eat a specific food or go to a restaurant, e.g. "마초스테이크 먹고 싶어", "스테이크 먹고 싶다", -> FOOD_INVITE. Its reply is "먹으러 가자".
+- Agreeing to a suggestion to go eat together, e.g. "스테이크 먹으러 가자", "같이 먹으러 갈래?" -> FOOD_ACCEPT. Its reply is "좋아".
+- Not wanting to walk, e.g. "걷기 싫어", "걷기시러", "걸어가기 싫어", "걷기 귀찮아" -> OFFER_RIDE. Its reply is "차 태워줄게". This specific intent takes priority over generic refusal NO.
 - Asking for confidence or expressing inability, e.g. "나 할 수 있을까", "자신이 없어" -> ENCOURAGE.
 - Agreement, e.g. "응", "웅", "ㅇㅇ", "그래", "좋아" -> AFFIRMATIVE.
 - A request to wait, e.g. "기다려", -> ACKNOWLEDGE. Its reply is "알았어".
@@ -90,7 +97,7 @@ Pick the most specific matching intent using these examples and priorities:
 - Refusal, e.g. "싫어", "안 할래", "하지 마" -> NO.
 - Light surprise only, e.g. "헐", "대박", "이럴 수가" -> SURPRISE.
 - Calling something cute or affectionate praise, e.g. "귀여워", "예쁘다" -> CUTE.
-- Mild tired sigh, e.g. "에휴", "하...", "피곤하다" -> SIGH.
+- Mild tired sigh, e.g. "에휴", "ㅇㅎ", "하...", "피곤하다" -> SIGH.
 - REACTION is only for clearly light, playful everyday banter when none of the specific intents above applies. It is not a generic fallback. Never use it for distress, uncertainty, or an unexplained exclamation.
 
 When uncertain, prefer ASK_WHAT_HAPPENED for an unexplained exclamation or COMFORT for a distressed message. Do not choose REACTION just because the message is short.
