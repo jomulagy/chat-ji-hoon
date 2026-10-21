@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { LocalChat, type ChatMessage } from './localChat';
 import './style.css';
 
@@ -9,6 +9,21 @@ function isSameMinute(first: string, second: string) {
   const b = new Date(second);
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() &&
     a.getDate() === b.getDate() && a.getHours() === b.getHours() && a.getMinutes() === b.getMinutes();
+}
+
+function getLocalDateKey(timestamp: string) {
+  const date = new Date(timestamp);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function getDateLabel(timestamp: string) {
+  const date = new Date(timestamp);
+  const today = new Date();
+  if (getLocalDateKey(timestamp) === getLocalDateKey(today.toISOString())) return '오늘';
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (getLocalDateKey(timestamp) === getLocalDateKey(yesterday.toISOString())) return '어제';
+  return date.toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' });
 }
 
 function getAppBasePath() {
@@ -142,7 +157,7 @@ export default function App() {
     <div className="splash-content">
       <div className="splash-mark" aria-hidden="true"><span>✳</span><i /><i /><i /></div>
       <h1>CHAT 지훈띠</h1>
-      <p>Gemini AI 연결을 확인하고 있어요</p>
+      <p>아현 무슨일이야</p>
       <div className="loading-track" role="progressbar" aria-label="앱 준비 중"><span /></div>
       <span className="splash-caption">메시지를 안전한 연결을 통해 AI에 전달합니다</span>
     </div>
@@ -156,7 +171,8 @@ export default function App() {
         const next = messages[index + 1];
         const joinsPrevious = m.role === 'user' && previous?.role === 'user';
         const joinsNext = m.role === 'user' && next?.role === 'user';
-        return <article key={m.id} className={`message ${m.role}${joinsPrevious ? ' fragment-previous' : ''}${joinsNext ? ' fragment-next' : ''}`}><div className="bubble">{m.content}</div><time>{new Date(m.createdAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}</time></article>;
+        const startsNewDate = !previous || getLocalDateKey(previous.createdAt) !== getLocalDateKey(m.createdAt);
+        return <Fragment key={m.id}>{startsNewDate && <div className="date-separator"><span>{getDateLabel(m.createdAt)}</span></div>}<article className={`message ${m.role}${joinsPrevious ? ' fragment-previous' : ''}${joinsNext ? ' fragment-next' : ''}`}><div className="bubble">{m.content}</div><time>{new Date(m.createdAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}</time></article></Fragment>;
       })}
     </section>
     <footer><button className="clear" onClick={() => window.location.reload()}>새로고침</button> · {messages.length}개 메시지</footer>
@@ -171,7 +187,8 @@ export default function App() {
         const showTime = m.role !== 'user' || !next || next.role !== 'user' || !isSameMinute(m.createdAt, next.createdAt);
         const joinsPrevious = m.role === 'user' && previous?.role === 'user';
         const joinsNext = m.role === 'user' && next?.role === 'user';
-        return <article key={m.id} className={`message ${m.role}${joinsPrevious ? ' fragment-previous' : ''}${joinsNext ? ' fragment-next' : ''}`}><div className="bubble">{m.content}</div>{showTime && <time>{new Date(m.createdAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}</time>}</article>;
+        const startsNewDate = !previous || getLocalDateKey(previous.createdAt) !== getLocalDateKey(m.createdAt);
+        return <Fragment key={m.id}>{startsNewDate && <div className="date-separator"><span>{getDateLabel(m.createdAt)}</span></div>}<article className={`message ${m.role}${joinsPrevious ? ' fragment-previous' : ''}${joinsNext ? ' fragment-next' : ''}`}><div className="bubble">{m.content}</div>{showTime && <time>{new Date(m.createdAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}</time>}</article></Fragment>;
       })}
       {waitingForTurn && !replying && <div className="thinking">말을 이어서 보내세요 · 마지막 메시지 후 3초 뒤 답변<span>•••</span></div>}
       {replying && <div className="thinking">말씀을 모아서 답변을 만들고 있어요<span>•••</span></div>}

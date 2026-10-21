@@ -83,20 +83,20 @@ Pick the most specific matching intent using these examples and priorities:
 - If the user is frustrated at the companion for not answering or says it is bad/stupid, e.g. "대답해 ㅠㅠ", "너 미어", "대답도 못하는 바보", "너 왜 대답을 못해", "왜 대답을 안 해", or the typo "왜대답응목하지" ("왜 대답을 못하지"), choose APOLOGY. Its reply is "미안해". This takes priority over ASK_WHAT_HAPPENED. Do not defend, tease, or use REACTION.
 - A problem/exclamation with no explanation, e.g. "좆됐어", "망했어", "큰일났어", "어떡해", "뭐야", "무슨 일이야" -> ASK_WHAT_HAPPENED. Ask what happened instead of teasing.
 - Clear worry or fear, e.g. "너무 불안해", "무서워", "걱정돼" -> COMFORT or REASSURE. Never REACTION.
-- Clear sadness or emotional pain, e.g. "우우래" (우울해), "슬퍼", "힘드러" (힘들어), "맘아파" (마음 아파), "속상해", "ㅠㅠ", "😭" -> CHECK_IN. Its reply is "아현 괜찮아?" This also takes priority when the user already explained the event or asks what the companion thinks, e.g. "지훈이가 버스를 놓쳤대\n맘아파". The event is context, not a reason to ask "아현 무슨일이야"; respond to the user's sadness. Never use REACTION.
+- Clear sadness, distress, or saying they are not okay, e.g. "우우래" (우울해), "슬퍼", "힘드러" (힘들어), "맘아파" (마음 아파), "속상해", "ㅠㅠ", "😭", or the shorthand "ㅇㄱㅊ" meaning "안 괜찮아" -> CHECK_IN. Its reply is "아현 괜찮아?" This also takes priority when the user already explained the event or asks what the companion thinks, e.g. "지훈이가 버스를 놓쳤대\n맘아파". The event is context, not a reason to ask "아현 무슨일이야"; respond to the user's sadness. Never use REACTION.
 - The user's shorthand "ㅇㅎ" means a tired sigh ("에휴") -> SIGH. Its reply is "ㅇㅎ". Never classify this exact shorthand as agreement or AFFIRMATIVE.
 - Direct sincere affection/love, e.g. "사랑해", "나 사랑해?", "보고싶어" addressed to the companion -> LOVE_BACK. Do not use for sarcasm, hostility, or quoted text.
 - Sleepiness or feeling cold, e.g. "졸", "졸려", "잠와", "자고 싶어", "추워", "추어" -> AFFECTION. Its reply is "오구".
-- Wanting to eat a specific food or go to a restaurant, e.g. "마초스테이크 먹고 싶어", "스테이크 먹고 싶다", -> FOOD_INVITE. Its reply is "먹으러 가자".
+- Wanting to eat a specific food, saying it looks delicious, or naming a food they want to eat, e.g. "마초스테이크 먹고 싶어", "스테이크 먹고 싶다", "곱창마싯겟다" -> FOOD_INVITE. Its reply is "먹으러 가자". This specific food intent takes priority over REACTION.
 - Agreeing to a suggestion to go eat together, e.g. "스테이크 먹으러 가자", "같이 먹으러 갈래?" -> FOOD_ACCEPT. Its reply is "좋아".
 - Not wanting to walk, e.g. "걷기 싫어", "걷기시러", "걸어가기 싫어", "걷기 귀찮아" -> OFFER_RIDE. Its reply is "차 태워줄게". This specific intent takes priority over generic refusal NO.
 - Asking for confidence or expressing inability, e.g. "나 할 수 있을까", "자신이 없어" -> ENCOURAGE.
-- Agreement, e.g. "응", "웅", "ㅇㅇ", "그래", "좋아" -> AFFIRMATIVE.
+- Agreement or warmly acknowledging that the companion said something new, e.g. "응", "웅", "ㅇㅇ", "그래", "좋아", "어아아 새로운 말을하다니" -> AFFIRMATIVE. Its reply is "웅". This exact new-phrase reaction is not SURPRISE or REACTION.
 - A request to wait, e.g. "기다려", -> ACKNOWLEDGE. Its reply is "알았어".
 - Correcting a misunderstanding, e.g. "그런 거 아니야", "아니 그게 아니라" -> DENY.
 - Refusal, e.g. "싫어", "안 할래", "하지 마" -> NO.
 - Light surprise only, e.g. "헐", "대박", "이럴 수가" -> SURPRISE.
-- Calling something cute or affectionate praise, e.g. "귀여워", "예쁘다" -> CUTE.
+- Calling something cute or affectionate praise, e.g. "귀여워", "예쁘다", or the playful laugh "움하하" -> CUTE. Its reply is "ㄱㅇㅇ". The exact "움하하" example takes priority over generic REACTION.
 - Mild tired sigh, e.g. "에휴", "ㅇㅎ", "하...", "피곤하다" -> SIGH.
 - REACTION is only for clearly light, playful everyday banter when none of the specific intents above applies. It is not a generic fallback. Never use it for distress, uncertainty, or an unexplained exclamation.
 
@@ -155,15 +155,78 @@ export default {
 
     const historyId = env.CHAT_HISTORY.idFromName('shared-chat-history');
     const history = env.CHAT_HISTORY.get(historyId);
-    const replyMessageId = typeof requestId === 'string' ? `service:${requestId}` : '';
-    if (replyMessageId) {
-      const cachedResponse = await history.fetch(new Request(`https://history.internal/reply?id=${encodeURIComponent(replyMessageId)}`));
-      if (cachedResponse.ok) {
-        const { serviceMessage } = await cachedResponse.json() as { serviceMessage: ChatMessageRecord };
-        return json({ intent: serviceMessage.intent, content: serviceMessage.content, serviceMessage }, 200, headers);
+    const requestUserId = typeof requestId === 'string' ? requestId : '';
+    let replyMessageId = requestUserId ? `service:${requestUserId}` : '';
+    let lockOwner = requestUserId;
+    let pendingUserMessages: Array<{ id: string; content: string; createdAt: string }> = [];
+    if (requestUserId) {
+      // Serialize reply generation across every browser tab/device. A per-message
+      // cache alone still lets concurrent clients classify different fragments
+      // at the same time and append responses out of order.
+      let acquired = false;
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const claimResponse = await history.fetch(new Request('https://history.internal/reply/claim', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: requestUserId }),
+        }));
+        if (!claimResponse.ok) return json({ error: '답변 처리 상태를 확인하지 못했습니다.' }, 503, headers);
+        const claim = await claimResponse.json() as {
+          acquired?: boolean; serviceMessage?: ChatMessageRecord; pendingUserMessages?: Array<{ id: string; content: string; createdAt: string }>;
+        };
+        if (claim.serviceMessage) {
+          return json({ intent: claim.serviceMessage.intent, content: claim.serviceMessage.content, serviceMessage: claim.serviceMessage }, 200, headers);
+        }
+        if (claim.acquired) {
+          acquired = true;
+          pendingUserMessages = claim.pendingUserMessages ?? [];
+          if (pendingUserMessages.length > 0) {
+            replyMessageId = `service:${pendingUserMessages[0].id}`;
+            text = pendingUserMessages.map((message) => message.content).join('\n');
+          }
+          break;
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 200));
+      }
+      if (!acquired) return json({ error: '다른 기기에서 답변을 처리 중입니다. 잠시 뒤 다시 시도해 주세요.' }, 503, headers);
+
+      // The three-second pause belongs to the shared conversation, not to each
+      // browser independently. Re-read the unhandled tail until it has been
+      // quiet for three seconds, then classify it as one turn.
+      for (let attempt = 0; attempt < 30 && pendingUserMessages.length > 0; attempt += 1) {
+        const lastMessageAt = Date.parse(pendingUserMessages.at(-1)!.createdAt);
+        const quietFor = Date.now() - lastMessageAt;
+        if (quietFor >= 3000) break;
+        await new Promise<void>((resolve) => setTimeout(resolve, Math.min(500, 3000 - quietFor)));
+        const pendingResponse = await history.fetch(new Request('https://history.internal/reply/pending'));
+        if (!pendingResponse.ok) {
+          await history.fetch(new Request('https://history.internal/reply/release', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: lockOwner }),
+          }));
+          return json({ error: '미응답 메시지를 확인하지 못했습니다.' }, 503, headers);
+        }
+        const pendingResult = await pendingResponse.json() as { messages: Array<{ id: string; content: string; createdAt: string }> };
+        pendingUserMessages = pendingResult.messages;
+        if (pendingUserMessages.length > 0) {
+          replyMessageId = `service:${pendingUserMessages[0].id}`;
+          text = pendingUserMessages.map((message) => message.content).join('\n');
+        }
+      }
+      if (pendingUserMessages.length === 0) {
+        await history.fetch(new Request('https://history.internal/reply/release', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: lockOwner }),
+        }));
+        return json({ error: '답변할 미응답 메시지를 찾지 못했습니다.' }, 409, headers);
+      }
+      if (text.length > 6000) {
+        await history.fetch(new Request('https://history.internal/reply/release', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: lockOwner }),
+        }));
+        return json({ error: '이어 보낸 메시지가 너무 깁니다. 나누어 다시 보내 주세요.' }, 413, headers);
       }
     }
 
+    try {
     const model = env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
     let upstream: Response;
     try {
@@ -208,13 +271,22 @@ export default {
       const saveResponse = await history.fetch(new Request('https://history.internal/reply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: replyMessageId, intent, content: replies[intent], createdAt }),
+          body: JSON.stringify({ id: replyMessageId, intent, content: replies[intent], createdAt, userIds: pendingUserMessages.map((message) => message.id) }),
       }));
       if (!saveResponse.ok) return json({ error: '답변을 기록하지 못했습니다. 다시 시도해 주세요.' }, 503, headers);
       const { serviceMessage } = await saveResponse.json() as { serviceMessage: ChatMessageRecord };
       return json({ intent: serviceMessage.intent, content: serviceMessage.content, serviceMessage }, 200, headers);
     }
     return json({ intent, content: replies[intent] }, 200, headers);
+    } finally {
+      if (replyMessageId) {
+        await history.fetch(new Request('https://history.internal/reply/release', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: lockOwner }),
+        }));
+      }
+    }
   },
 };
 
@@ -228,10 +300,70 @@ export class ChatHistory extends DurableObject {
       intent TEXT,
       created_at TEXT NOT NULL
     )`);
+    ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS reply_lock (
+      lock_id TEXT PRIMARY KEY,
+      request_id TEXT NOT NULL,
+      expires_at INTEGER NOT NULL
+    )`);
+    ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS reply_aliases (
+      user_id TEXT PRIMARY KEY,
+      service_id TEXT NOT NULL
+    )`);
   }
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    if (request.method === 'GET' && url.pathname === '/reply/pending') {
+      return Response.json({ messages: this.getPendingUserMessages() }, { headers: { 'Cache-Control': 'no-store' } });
+    }
+    if (request.method === 'POST' && url.pathname === '/reply/claim') {
+      let input: unknown;
+      try { input = await request.json(); } catch { return Response.json({ error: 'Invalid claim.' }, { status: 400 }); }
+      if (typeof input !== 'object' || input === null || typeof (input as { userId?: unknown }).userId !== 'string') {
+        return Response.json({ error: 'Invalid claim.' }, { status: 400 });
+      }
+      const userId = (input as { userId: string }).userId;
+      if (!userId.trim() || userId.length > 100) return Response.json({ error: 'Invalid claim.' }, { status: 400 });
+      let serviceMessage: ChatMessageRecord | undefined;
+      let acquired = false;
+      let pendingUserMessages: Array<{ id: string; content: string; createdAt: string }> = [];
+      const now = Date.now();
+      this.ctx.storage.transactionSync(() => {
+        const alias = this.ctx.storage.sql.exec<{ service_id: string }>(
+          'SELECT service_id FROM reply_aliases WHERE user_id = ? LIMIT 1', userId,
+        ).toArray()[0];
+        const cachedId = alias?.service_id ?? `service:${userId}`;
+        const row = this.ctx.storage.sql.exec<{ id: string; role: 'service'; content: string; intent: Intent; created_at: string }>(
+          'SELECT id, role, content, intent, created_at FROM messages WHERE id = ? AND role = ? LIMIT 1', cachedId, 'service',
+        ).toArray()[0];
+        if (row) {
+          serviceMessage = { id: row.id, role: row.role, content: row.content, intent: row.intent, createdAt: row.created_at };
+          return;
+        }
+        const lock = this.ctx.storage.sql.exec<{ request_id: string; expires_at: number }>(
+          'SELECT request_id, expires_at FROM reply_lock WHERE lock_id = ? LIMIT 1', 'shared-reply',
+        ).toArray()[0];
+        if (lock && lock.expires_at > now) return;
+        pendingUserMessages = this.getPendingUserMessages();
+        if (pendingUserMessages.length === 0) return;
+        this.ctx.storage.sql.exec(
+          `INSERT INTO reply_lock (lock_id, request_id, expires_at) VALUES (?, ?, ?)
+           ON CONFLICT(lock_id) DO UPDATE SET request_id = excluded.request_id, expires_at = excluded.expires_at`,
+          'shared-reply', userId, now + 60_000,
+        );
+        acquired = true;
+      });
+      return Response.json({ acquired, ...(serviceMessage ? { serviceMessage } : {}), ...(acquired ? { pendingUserMessages } : {}) }, { headers: { 'Cache-Control': 'no-store' } });
+    }
+    if (request.method === 'POST' && url.pathname === '/reply/release') {
+      let input: unknown;
+      try { input = await request.json(); } catch { return Response.json({ error: 'Invalid release.' }, { status: 400 }); }
+      if (typeof input !== 'object' || input === null || typeof (input as { id?: unknown }).id !== 'string') {
+        return Response.json({ error: 'Invalid release.' }, { status: 400 });
+      }
+      this.ctx.storage.sql.exec('DELETE FROM reply_lock WHERE lock_id = ? AND request_id = ?', 'shared-reply', (input as { id: string }).id);
+      return Response.json({ released: true }, { headers: { 'Cache-Control': 'no-store' } });
+    }
     if (request.method === 'GET' && url.pathname === '/reply') {
       const id = url.searchParams.get('id');
       if (!id || id.length > 110) return Response.json({ error: 'Invalid reply id.' }, { status: 400 });
@@ -246,17 +378,22 @@ export class ChatHistory extends DurableObject {
       let input: unknown;
       try { input = await request.json(); } catch { return Response.json({ error: 'Request body must be valid JSON.' }, { status: 400 }); }
       if (typeof input !== 'object' || input === null) return Response.json({ error: 'Invalid reply.' }, { status: 400 });
-      const reply = input as { id?: unknown; intent?: unknown; content?: unknown; createdAt?: unknown };
+      const reply = input as { id?: unknown; intent?: unknown; content?: unknown; createdAt?: unknown; userIds?: unknown };
       if (typeof reply.id !== 'string' || !reply.id.startsWith('service:') || reply.id.length > 110 ||
           typeof reply.intent !== 'string' || !Object.hasOwn(replies, reply.intent) || typeof reply.content !== 'string' ||
           typeof reply.createdAt !== 'string' || Number.isNaN(Date.parse(reply.createdAt))) {
         return Response.json({ error: 'Invalid reply.' }, { status: 400 });
       }
+      const userIds = Array.isArray(reply.userIds) ? reply.userIds : [reply.id.replace(/^service:/u, '')];
+      if (userIds.some((id) => typeof id !== 'string' || id.length > 100)) return Response.json({ error: 'Invalid reply aliases.' }, { status: 400 });
       this.ctx.storage.transactionSync(() => {
         this.ctx.storage.sql.exec(
           'INSERT OR IGNORE INTO messages (id, role, content, intent, created_at) VALUES (?, ?, ?, ?, ?)',
           reply.id, 'service', reply.content, reply.intent, reply.createdAt,
         );
+        for (const userId of userIds as string[]) {
+          this.ctx.storage.sql.exec('INSERT OR IGNORE INTO reply_aliases (user_id, service_id) VALUES (?, ?)', userId, reply.id);
+        }
       });
       const row = this.ctx.storage.sql.exec<{ id: string; role: 'user' | 'service'; content: string; intent: string | null; created_at: string }>(
         'SELECT id, role, content, intent, created_at FROM messages WHERE id = ? AND role = ? LIMIT 1', reply.id, 'service',
@@ -290,5 +427,17 @@ export class ChatHistory extends DurableObject {
       item.id, item.role, item.content, item.intent ?? null, item.createdAt,
     );
     return Response.json({ saved: true, id: item.id }, { status: 201 });
+  }
+
+  private getPendingUserMessages() {
+    const rows = this.ctx.storage.sql.exec<{ id: string; content: string; created_at: string }>(
+      `SELECT user_message.id, user_message.content, user_message.created_at
+       FROM messages AS user_message
+       WHERE user_message.role = 'user'
+         AND NOT EXISTS (SELECT 1 FROM reply_aliases WHERE reply_aliases.user_id = user_message.id)
+         AND NOT EXISTS (SELECT 1 FROM messages AS service_message WHERE service_message.id = 'service:' || user_message.id AND service_message.role = 'service')
+       ORDER BY user_message.created_at, user_message.rowid`,
+    ).toArray();
+    return rows.map(({ id, content, created_at }) => ({ id, content, createdAt: created_at }));
   }
 }
