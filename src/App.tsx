@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { LocalChat, type ChatMessage } from './localChat';
+import { LocalChat, type ChatDiagnostic, type ChatMessage } from './localChat';
 import './style.css';
 
 const CHAT_CLEAR_CUTOFF_KEY = 'chat-jihun-cleared-through-message-id';
@@ -36,6 +36,7 @@ export default function App() {
   const messagesPage = window.location.pathname.replace(/\/+$/u, '').endsWith('/messages');
   const homeUrl = `${appBasePath || ''}/`;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [diagnostics, setDiagnostics] = useState<ChatDiagnostic[]>([]);
   const [chatClearCutoff, setChatClearCutoff] = useState(() => window.localStorage.getItem(CHAT_CLEAR_CUTOFF_KEY) ?? '');
   const [text, setText] = useState('');
   const [replying, setReplying] = useState(false);
@@ -58,10 +59,12 @@ export default function App() {
         (reason: unknown) => ({ ok: false as const, reason }),
       );
       const runtimePromise = messagesPage ? Promise.resolve(null) : LocalChat.getRuntimeStatus();
+      const diagnosticsPromise = messagesPage ? LocalChat.getDiagnostics().then((value) => value.diagnostics).catch(() => []) : Promise.resolve([] as ChatDiagnostic[]);
       const minimumSplash = messagesPage ? Promise.resolve() : new Promise<void>((resolve) => window.setTimeout(resolve, 800));
-      const [historyResult, runtimeResult] = await Promise.all([historyPromise, runtimePromise, minimumSplash]);
+      const [historyResult, runtimeResult, , diagnosticEntries] = await Promise.all([historyPromise, runtimePromise, minimumSplash, diagnosticsPromise]);
       if (!active) return;
       if (runtimeResult) setRuntimeMessage(runtimeResult.message);
+      setDiagnostics(diagnosticEntries);
       if (historyResult.ok) {
         const loadedMessages = historyResult.value.messages;
         setMessages(loadedMessages);
@@ -72,7 +75,13 @@ export default function App() {
           });
           const unanswered = loadedMessages.slice(lastServiceIndex + 1)
             .filter((message) => message.role === 'user');
-          if (unanswered.length > 0) pendingFragments.current.push(...unanswered);
+          if (unanswered.length > 0) {
+            pendingFragments.current.push(...unanswered);
+            void LocalChat.recordDiagnostic({
+              event: 'unanswered_recovered', requestId: unanswered[0].id, code: 'pending_messages_on_load',
+              message: `앱을 열었을 때 답변되지 않은 메시지 ${unanswered.length}건을 발견했습니다.`,
+            });
+          }
         }
       }
       else setError(historyResult.reason instanceof Error ? historyResult.reason.message : '대화 기록을 불러오지 못했습니다.');
@@ -136,6 +145,7 @@ export default function App() {
       pendingFragments.current.push(userMessage);
       scheduleReply();
     } catch (e) {
+      void LocalChat.recordDiagnostic({ event: 'user_message_save_failed', code: 'message_save_error', message: e instanceof Error ? e.message : '메시지를 처리하지 못했습니다.' });
       setError(e instanceof Error ? e.message : '메시지를 처리하지 못했습니다.');
       setText(value);
     }
@@ -175,6 +185,17 @@ export default function App() {
         return <Fragment key={m.id}>{startsNewDate && <div className="date-separator"><span>{getDateLabel(m.createdAt)}</span></div>}<article className={`message ${m.role}${joinsPrevious ? ' fragment-previous' : ''}${joinsNext ? ' fragment-next' : ''}`}><div className="bubble">{m.content}</div><time>{new Date(m.createdAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}</time></article></Fragment>;
       })}
     </section>
+    <details className="diagnostic-log">
+      <summary>답변 진단 로그 ({diagnostics.length})</summary>
+      <p>질문 내용은 저장하지 않습니다. 요청 단계와 오류 상태만 기록합니다. 서버 전송이 실패한 로그는 이 브라우저에 보관됩니다.</p>
+      {diagnostics.length === 0 ? <div className="diagnostic-empty">기록된 진단 로그가 없습니다.</div> : <ol>
+        {diagnostics.map((entry) => <li key={entry.id}>
+          <time>{new Date(entry.createdAt).toLocaleString('ko-KR')}</time>
+          <strong>{entry.event}</strong> · {entry.code}{entry.httpStatus ? ` · HTTP ${entry.httpStatus}` : ''}{entry.elapsedMs !== undefined ? ` · ${entry.elapsedMs}ms` : ''}
+          <span>{entry.message}</span><small>{entry.client} · {entry.online ? '온라인' : '오프라인'}{entry.requestId ? ` · ${entry.requestId}` : ''}</small>
+        </li>)}
+      </ol>}
+    </details>
     <footer><button className="clear" onClick={() => window.location.reload()}>새로고침</button> · {messages.length}개 메시지</footer>
   </main>;
 

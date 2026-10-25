@@ -76,6 +76,13 @@ function isAuthorized(request: Request, env: Env) {
   return !env.APP_ACCESS_TOKEN || request.headers.get('Authorization') === `Bearer ${env.APP_ACCESS_TOKEN}`;
 }
 
+function getClientFamily(request: Request) {
+  const agent = request.headers.get('User-Agent') ?? '';
+  if (/iPhone|iPad|iPod/iu.test(agent)) return /Safari/iu.test(agent) && !/CriOS|FxiOS|EdgiOS/iu.test(agent) ? 'ios-safari' : 'ios-other';
+  if (/Android/iu.test(agent)) return 'android';
+  return 'desktop';
+}
+
 function getDeterministicIntent(text: string): Intent | undefined {
   const normalized = text.trim().replace(/[\s.!?~。！？]+/gu, '');
   if (/^(안녕|안녕하세요|하이|ㅎㅇ)$/u.test(normalized)) return 'GREETING';
@@ -131,10 +138,11 @@ export default {
     }
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers });
 
-    if (!['/health', '/reply', '/messages'].includes(url.pathname)) return json({ error: '경로를 찾을 수 없습니다.' }, 404, headers);
+    if (!['/health', '/reply', '/messages', '/diagnostics'].includes(url.pathname)) return json({ error: '경로를 찾을 수 없습니다.' }, 404, headers);
     if (!isAuthorized(request, env)) return json({ error: 'Worker 접속 코드가 올바르지 않습니다.' }, 401, headers);
-    if (url.pathname === '/messages') {
-      if (!['GET', 'POST', 'DELETE'].includes(request.method)) return json({ error: '지원하지 않는 요청입니다.' }, 405, headers);
+    if (url.pathname === '/messages' || url.pathname === '/diagnostics') {
+      const allowedMethods = url.pathname === '/messages' ? ['GET', 'POST', 'DELETE'] : ['GET', 'POST'];
+      if (!allowedMethods.includes(request.method)) return json({ error: '지원하지 않는 요청입니다.' }, 405, headers);
       const id = env.CHAT_HISTORY.idFromName('shared-chat-history');
       const stored = await env.CHAT_HISTORY.get(id).fetch(new Request(`https://history.internal${url.pathname}`, request));
       const responseHeaders = new Headers(stored.headers);
@@ -172,6 +180,23 @@ export default {
     const historyId = env.CHAT_HISTORY.idFromName('shared-chat-history');
     const history = env.CHAT_HISTORY.get(historyId);
     const requestUserId = typeof requestId === 'string' ? requestId : '';
+    if (requestUserId) {
+      const received = await history.fetch(new Request('https://history.internal/diagnostics', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: `worker-received:${requestUserId}`,
+          event: 'worker_received',
+          requestId: requestUserId,
+          code: 'worker_received',
+          message: 'Cloudflare Worker가 답변 요청을 받았습니다.',
+          client: getClientFamily(request),
+          online: true,
+          createdAt: new Date().toISOString(),
+        }),
+      }));
+      if (!received.ok) console.error('[CHAT_DIAGNOSTIC] Worker 요청 수신 로그 저장 실패', { requestId: requestUserId, status: received.status });
+    }
     let replyMessageId = requestUserId ? `service:${requestUserId}` : '';
     let lockOwner = requestUserId;
     let pendingUserMessages: Array<{ id: string; content: string; createdAt: string }> = [];
@@ -327,10 +352,62 @@ export class ChatHistory extends DurableObject {
       user_id TEXT PRIMARY KEY,
       service_id TEXT NOT NULL
     )`);
+    ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS diagnostics (
+      id TEXT PRIMARY KEY,
+      event TEXT NOT NULL,
+      request_id TEXT,
+      code TEXT NOT NULL,
+      message TEXT NOT NULL,
+      http_status INTEGER,
+      elapsed_ms INTEGER,
+      client TEXT NOT NULL,
+      online INTEGER NOT NULL,
+      created_at TEXT NOT NULL
+    )`);
   }
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    if (url.pathname === '/diagnostics' && request.method === 'POST') {
+      let input: unknown;
+      try { input = await request.json(); } catch { return Response.json({ error: 'Invalid diagnostic.' }, { status: 400 }); }
+      if (typeof input !== 'object' || input === null) return Response.json({ error: 'Invalid diagnostic.' }, { status: 400 });
+      const item = input as {
+        id?: unknown; event?: unknown; requestId?: unknown; code?: unknown; message?: unknown;
+        httpStatus?: unknown; elapsedMs?: unknown; client?: unknown; online?: unknown; createdAt?: unknown;
+      };
+      if (typeof item.id !== 'string' || item.id.length > 100 || typeof item.event !== 'string' || item.event.length > 60 ||
+          (item.requestId !== undefined && (typeof item.requestId !== 'string' || item.requestId.length > 100)) ||
+          typeof item.code !== 'string' || !/^[a-z0-9_-]{1,60}$/u.test(item.code) ||
+          typeof item.message !== 'string' || item.message.length > 500 ||
+          (item.httpStatus !== undefined && (!Number.isInteger(item.httpStatus) || Number(item.httpStatus) < 100 || Number(item.httpStatus) > 599)) ||
+          (item.elapsedMs !== undefined && (!Number.isInteger(item.elapsedMs) || Number(item.elapsedMs) < 0 || Number(item.elapsedMs) > 600_000)) ||
+          typeof item.client !== 'string' || !['ios-safari', 'ios-other', 'android', 'desktop'].includes(item.client) ||
+          typeof item.online !== 'boolean' || typeof item.createdAt !== 'string' || Number.isNaN(Date.parse(item.createdAt))) {
+        return Response.json({ error: 'Invalid diagnostic.' }, { status: 400 });
+      }
+      this.ctx.storage.sql.exec(
+        `INSERT OR IGNORE INTO diagnostics (id, event, request_id, code, message, http_status, elapsed_ms, client, online, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        item.id, item.event, item.requestId ?? null, item.code, item.message, item.httpStatus ?? null,
+        item.elapsedMs ?? null, item.client, item.online ? 1 : 0, item.createdAt,
+      );
+      this.ctx.storage.sql.exec(
+        'DELETE FROM diagnostics WHERE id NOT IN (SELECT id FROM diagnostics ORDER BY created_at DESC LIMIT 200)',
+      );
+      console.info('[CHAT_DIAGNOSTIC]', JSON.stringify({ event: item.event, requestId: item.requestId, code: item.code, httpStatus: item.httpStatus, elapsedMs: item.elapsedMs, client: item.client, online: item.online }));
+      return Response.json({ saved: true, id: item.id }, { status: 201, headers: { 'Cache-Control': 'no-store' } });
+    }
+    if (url.pathname === '/diagnostics' && request.method === 'GET') {
+      const rows = this.ctx.storage.sql.exec<{
+        id: string; event: string; request_id: string | null; code: string; message: string;
+        http_status: number | null; elapsed_ms: number | null; client: string; online: number; created_at: string;
+      }>('SELECT id, event, request_id, code, message, http_status, elapsed_ms, client, online, created_at FROM diagnostics ORDER BY created_at DESC LIMIT 200').toArray();
+      return Response.json({ diagnostics: rows.map(({ request_id, http_status, elapsed_ms, online, created_at, ...item }) => ({
+        ...item, ...(request_id ? { requestId: request_id } : {}), ...(http_status ? { httpStatus: http_status } : {}),
+        ...(elapsed_ms !== null ? { elapsedMs: elapsed_ms } : {}), online: Boolean(online), createdAt: created_at,
+      })) }, { headers: { 'Cache-Control': 'no-store' } });
+    }
     if (request.method === 'GET' && url.pathname === '/reply/pending') {
       return Response.json({ messages: this.getPendingUserMessages() }, { headers: { 'Cache-Control': 'no-store' } });
     }

@@ -78,3 +78,13 @@ pnpm run worker:dev
 - AI 모델: Google Gemini API
 
 Gemini 무료 사용량과 데이터 처리 정책은 바뀔 수 있습니다. 민감한 개인정보나 비밀 대화는 입력하지 마세요.
+# 답변이 오지 않을 때 확인
+
+`/messages` 페이지 하단의 **답변 진단 로그**를 열면 브라우저와 Worker가 남긴 최근 진단 기록을 볼 수 있습니다. 진단에는 질문 본문을 넣지 않고 요청 ID, 단계, 오류 코드, HTTP 상태, 소요 시간, 기기 종류만 저장합니다. Worker에 로그를 보낼 수 없는 경우에는 해당 브라우저의 로컬 저장소와 개발자 콘솔에 남깁니다.
+
+- `reply_started`만 있고 `worker_received`가 없으면 Worker가 요청을 받기 전 네트워크/CORS/라우팅에서 실패했을 가능성이 있습니다.
+- `worker_received`가 있지만 `reply_succeeded` 또는 `reply_failed`가 없으면 Worker, Gemini 또는 기록 저장 처리 중 멈췄을 가능성이 있습니다.
+- `reply_failed`의 코드와 HTTP 상태로 타임아웃, 네트워크 오류, Worker 오류 등을 구분할 수 있습니다.
+- `unanswered_recovered`는 앱을 다시 열었을 때 앞선 답변이 저장되지 않은 사용자 메시지를 발견해 재처리를 시도했음을 뜻합니다.
+
+서버 로그는 Cloudflare Worker의 `CHAT_HISTORY` Durable Object에 최근 200건을 보관합니다. 로그를 기록하는 기능이 배포된 뒤 발생한 요청부터 확인할 수 있습니다.
