@@ -85,6 +85,7 @@ Gemini 무료 사용량과 데이터 처리 정책은 바뀔 수 있습니다. �
 - `reply_started`만 있고 `worker_received`가 없으면 Worker가 요청을 받기 전 네트워크/CORS/라우팅에서 실패했을 가능성이 있습니다.
 - `worker_received`가 있지만 `reply_succeeded` 또는 `reply_failed`가 없으면 Worker, Gemini 또는 기록 저장 처리 중 멈췄을 가능성이 있습니다.
 - `reply_failed`의 코드와 HTTP 상태로 타임아웃, 네트워크 오류, Worker 오류 등을 구분할 수 있습니다.
+- `gemini_request_failed`는 Worker가 Gemini 호출 단계에서 기록한 서버 로그입니다. `code`가 `gemini_upstream_http_error`, `gemini_rate_limited`, `gemini_auth_failed`, `gemini_network_error`, `gemini_invalid_json`, `gemini_empty_response`, `gemini_invalid_response` 중 무엇인지와 HTTP 상태를 확인하면 됩니다. HTTP 상태는 Gemini가 Worker에 돌려준 원본 상태이며, 요청 ID로 브라우저의 `reply_failed` 로그와 연결할 수 있습니다.
 - `unanswered_recovered`는 앱을 다시 열었을 때 앞선 답변이 저장되지 않은 사용자 메시지를 발견해 재처리를 시도했음을 뜻합니다.
 
-서버 로그는 Cloudflare Worker의 `CHAT_HISTORY` Durable Object에 최근 200건을 보관합니다. 로그를 기록하는 기능이 배포된 뒤 발생한 요청부터 확인할 수 있습니다.
+서버 로그는 Cloudflare Worker의 `CHAT_HISTORY` Durable Object에 최근 200건을 보관합니다. Gemini 원본 오류 본문, API 키, 질문 내용은 저장하지 않습니다. 이 진단 기능을 포함한 Worker가 배포된 뒤 발생한 요청부터 확인할 수 있습니다. `/messages` 화면의 진단 로그를 새로고침해 확인하거나 Cloudflare 대시보드의 Worker Logs/Tail에서 `[CHAT_DIAGNOSTIC]` 로그를 볼 수 있습니다.

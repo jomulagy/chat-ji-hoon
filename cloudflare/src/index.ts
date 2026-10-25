@@ -182,6 +182,27 @@ export default {
     const historyId = env.CHAT_HISTORY.idFromName('shared-chat-history');
     const history = env.CHAT_HISTORY.get(historyId);
     const requestUserId = typeof requestId === 'string' ? requestId : '';
+    let geminiStartedAt = Date.now();
+    const recordGeminiDiagnostic = async (code: string, message: string, httpStatus?: number) => {
+      if (!requestUserId) return;
+      const diagnostic = await history.fetch(new Request('https://history.internal/diagnostics', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: `gemini-error:${crypto.randomUUID()}`,
+          event: 'gemini_request_failed',
+          requestId: requestUserId,
+          code,
+          message,
+          ...(httpStatus === undefined ? {} : { httpStatus }),
+          elapsedMs: Date.now() - geminiStartedAt,
+          client: getClientFamily(request),
+          online: true,
+          createdAt: new Date().toISOString(),
+        }),
+      }));
+      if (!diagnostic.ok) throw new Error(`진단 로그 저장 실패 (${diagnostic.status})`);
+    };
     if (requestUserId) {
       const received = await history.fetch(new Request('https://history.internal/diagnostics', {
         method: 'POST',
@@ -272,6 +293,7 @@ export default {
     try {
     let intent = getDeterministicIntent(text);
     if (!intent) {
+      geminiStartedAt = Date.now();
       const model = env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
       let upstream: Response;
       try {
@@ -289,25 +311,66 @@ export default {
             },
           }),
         });
-      } catch {
+      } catch (error) {
+        try {
+          await recordGeminiDiagnostic('gemini_network_error', 'Gemini 서버에 연결하지 못했습니다. 네트워크 요청 단계에서 실패했습니다.');
+        } catch (logError) {
+          console.error('[CHAT_DIAGNOSTIC] Gemini 네트워크 오류 로그 저장 실패', {
+            requestId: requestUserId,
+            errorName: error instanceof Error ? error.name : 'unknown',
+            logError: logError instanceof Error ? logError.message : 'unknown',
+          });
+        }
         return json({ error: 'Gemini 서비스에 연결할 수 없습니다. 잠시 뒤 다시 시도해 주세요.' }, 502, headers);
       }
       if (!upstream.ok) {
+        let providerStatus = '';
+        try {
+          const payload = await upstream.clone().json() as { error?: { status?: unknown } };
+          if (typeof payload.error?.status === 'string' && /^[A-Z0-9_]{1,60}$/u.test(payload.error.status)) {
+            providerStatus = payload.error.status;
+          }
+        } catch { /* Provider error body is deliberately not retained. */ }
+        const safeProviderStatus = providerStatus ? ` · ${providerStatus}` : '';
+        try {
+          await recordGeminiDiagnostic(
+            upstream.status === 429 ? 'gemini_rate_limited' : upstream.status === 401 || upstream.status === 403 ? 'gemini_auth_failed' : 'gemini_upstream_http_error',
+            `Gemini 응답 실패: HTTP ${upstream.status}${safeProviderStatus}`,
+            upstream.status,
+          );
+        } catch (error) {
+          console.error('[CHAT_DIAGNOSTIC] Gemini 응답 오류 로그 저장 실패', {
+            requestId: requestUserId,
+            upstreamStatus: upstream.status,
+            error: error instanceof Error ? error.message : 'unknown',
+          });
+        }
         if (upstream.status === 429) return json({ error: 'Gemini 무료 사용 한도에 도달했습니다. 나중에 다시 시도해 주세요.' }, 429, headers);
         if (upstream.status === 401 || upstream.status === 403) return json({ error: 'Gemini API 키를 확인해 주세요.' }, 502, headers);
         return json({ error: 'Gemini가 답변을 만들지 못했습니다. 잠시 뒤 다시 시도해 주세요.' }, 502, headers);
       }
 
-      const result = await upstream.json() as {
-        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-      };
+      let result: { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+      try {
+        result = await upstream.json() as typeof result;
+      } catch {
+        try { await recordGeminiDiagnostic('gemini_invalid_json', 'Gemini가 JSON이 아닌 응답을 반환했습니다.', upstream.status); }
+        catch (error) { console.error('[CHAT_DIAGNOSTIC] Gemini JSON 오류 로그 저장 실패', { requestId: requestUserId, error: error instanceof Error ? error.message : 'unknown' }); }
+        return json({ error: 'AI 응답을 확인하지 못했습니다. 다시 시도해 주세요.' }, 502, headers);
+      }
       const output = result.candidates?.[0]?.content?.parts?.map((part) => part.text ?? '').join('').trim();
-      if (!output) return json({ error: '메시지를 분석할 수 없습니다. 다른 표현으로 다시 보내 주세요.' }, 422, headers);
+      if (!output) {
+        try { await recordGeminiDiagnostic('gemini_empty_response', 'Gemini 응답에 분류 결과가 없었습니다.', upstream.status); }
+        catch (error) { console.error('[CHAT_DIAGNOSTIC] Gemini 빈 응답 로그 저장 실패', { requestId: requestUserId, error: error instanceof Error ? error.message : 'unknown' }); }
+        return json({ error: '메시지를 분석할 수 없습니다. 다른 표현으로 다시 보내 주세요.' }, 422, headers);
+      }
       try {
         const parsed = JSON.parse(output) as { intent?: string };
         if (typeof parsed.intent !== 'string' || !Object.hasOwn(replies, parsed.intent)) throw new Error('Unknown intent');
         intent = parsed.intent as Intent;
       } catch {
+        try { await recordGeminiDiagnostic('gemini_invalid_response', 'Gemini 응답을 허용된 의도로 해석하지 못했습니다.', upstream.status); }
+        catch (error) { console.error('[CHAT_DIAGNOSTIC] Gemini 응답 형식 오류 로그 저장 실패', { requestId: requestUserId, error: error instanceof Error ? error.message : 'unknown' }); }
         return json({ error: 'AI 응답을 확인하지 못했습니다. 다시 시도해 주세요.' }, 502, headers);
       }
     }
