@@ -16,6 +16,7 @@ const replies = {
   FOOD_INVITE: '먹으러 가자',
   FOOD_ACCEPT: '좋아',
   OFFER_RIDE: '차 태워줄게',
+  JOB_CHANGE: '이직하자',
   ACKNOWLEDGE: '알았어',
   APOLOGY: '미안해',
   COMFORT: '아현 걱정하지마',
@@ -113,6 +114,7 @@ Pick the most specific matching intent using these examples and priorities:
 - Wanting to eat a specific food, saying it looks delicious, or naming a food they want to eat, e.g. "마초스테이크 먹고 싶어", "스테이크 먹고 싶다", "곱창마싯겟다" -> FOOD_INVITE. Its reply is "먹으러 가자". This specific food intent takes priority over REACTION.
 - Agreeing to a suggestion to go eat together, e.g. "스테이크 먹으러 가자", "같이 먹으러 갈래?" -> FOOD_ACCEPT. Its reply is "좋아".
 - Not wanting to walk, e.g. "걷기 싫어", "걷기시러", "걸어가기 싫어", "걷기 귀찮아" -> OFFER_RIDE. Its reply is "차 태워줄게". This specific intent takes priority over generic refusal NO.
+- Disliking the user's current work or wanting a different kind of job, e.g. "실험하기 싫어, 앉아서 일하고 싶어", -> JOB_CHANGE. Its reply is "이직하자". This is a work preference, not a refusal; do not choose NO just because it contains "싫어".
 - Asking for confidence or expressing inability, e.g. "나 할 수 있을까", "자신이 없어" -> ENCOURAGE.
 - Agreement or warmly acknowledging that the companion said something new, e.g. "응", "웅", "ㅇㅇ", "그래", "좋아", "어아아 새로운 말을하다니" -> AFFIRMATIVE. Its reply is "웅". This exact new-phrase reaction is not SURPRISE or REACTION.
 - A request to wait, e.g. "기다려", -> ACKNOWLEDGE. Its reply is "알았어".
